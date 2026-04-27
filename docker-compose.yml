@@ -2,7 +2,7 @@ version: '3.9'
 services:
   app:
     container_name: feishu-pocket
-    image: ghcr.io/${IMAGE_NAMESPACE:-fuck996}/feishu-pocket:${IMAGE_TAG:-v0.2.1}
+    image: ghcr.io/fuck996/feishu-pocket@sha256:8bd00a3b7c5c2d2c27ab4c38bc5610d1f2e81c48918b25729d8ae89b27e60b0a
     restart: unless-stopped
     ports:
       - "${APP_PORT:-45174}:3000"
@@ -29,3 +29,4 @@ volumes:
 networks:
   feishu-network:
     driver: bridge
+
