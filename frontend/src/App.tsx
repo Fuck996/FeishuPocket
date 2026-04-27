@@ -1393,6 +1393,22 @@ function App() {
                 <button type="submit">保存通知时间</button>
               </form>
             </section>
+
+            <section className="panel-card">
+              <div className="panel-card__header">
+                <div>
+                  <p className="section-eyebrow">精确指令</p>
+                  <h2>群内可直接执行命令</h2>
+                </div>
+              </div>
+              <div className="command-guide-list">
+                <div className="command-guide-item"><strong>1. 发放零花钱</strong>：立刻发放零花钱，且下一次自动发放不再执行（可反复操作）</div>
+                <div className="command-guide-item"><strong>2. 余额增加：n</strong>：中英文冒号都支持，n 为元金额</div>
+                <div className="command-guide-item"><strong>3. 余额减少：n</strong>：中英文冒号都支持，n 为元金额</div>
+                <div className="command-guide-item"><strong>4. 查询余额 / 余额</strong>：返回最后一次余额变动卡片数据</div>
+              </div>
+              <p className="field-hint">带有消费信息的自然语言（例如“扣掉5元，因为…”）会进入 AI 识别流程；精确指令优先级更高。</p>
+            </section>
           </>
         )}
 

@@ -235,6 +235,44 @@ function extractMessageText(contentRaw: string, messageType?: string): string {
   return contentRaw;
 }
 
+function parsePreciseBotCommand(text: string): ParsedBotAction | null {
+  const normalized = text.trim();
+
+  // 1) 发放零花钱（可选指定孩子）
+  const manualGrant = normalized.match(/^发放零花钱(?:\s*[：:]\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12}))?$/);
+  if (manualGrant) {
+    return {
+      intent: 'manual_grant_daily_allowance',
+      childName: manualGrant[1]
+    };
+  }
+
+  // 2) 余额增加：n
+  const increase = normalized.match(/^余额增加\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
+  if (increase) {
+    return {
+      intent: 'increase_balance',
+      amount: Math.abs(Number(increase[1]))
+    };
+  }
+
+  // 3) 余额减少：n
+  const decrease = normalized.match(/^余额减少\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
+  if (decrease) {
+    return {
+      intent: 'decrease_balance',
+      amount: Math.abs(Number(decrease[1]))
+    };
+  }
+
+  // 4) 查询余额 / 余额
+  if (/^(查询余额|余额)$/.test(normalized)) {
+    return { intent: 'query_balance' };
+  }
+
+  return null;
+}
+
 // 根据机器人对象解析飞书发送目标
 function resolveTargetForRobot(robot: RobotConfig, chatIdOverride?: string): FeishuSendTarget {
   const mode = robot.feishuMode ?? 'app';
@@ -972,7 +1010,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.9' });
+  res.json({ success: true, version: '0.3.10' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1801,44 +1839,50 @@ async function processBotMessage(
     status: 'ok'
   });
 
-  const parserModel = resolveParserModelConfig();
-  let action: ParsedBotAction;
-  try {
-    action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
-  } catch (err) {
-    // AI 调用失败，更新入站日志状态，发送失败卡片
-    const list = botLogs.get(primaryRobot.id);
-    const inLog = list?.find((l) => l.id === inLogId);
-    if (inLog) {
-      inLog.status = 'failed';
-      inLog.error = err instanceof Error ? err.message : 'AI 调用失败';
-    }
+  let action = parsePreciseBotCommand(text);
+  if (!action) {
+    const parserModel = resolveParserModelConfig();
     try {
-      const msgId = await sendRobotCard({
-        title: '⚠️ 消息识别失败',
-        lines: [
-          `**原始消息**：${text}`,
-          `**失败原因**：AI 模型调用异常，请检查模型配置`
-        ],
-        color: 'red'
-      }, chatId);
-      pushBotLog({
-        id: nanoid(),
-        robotId: primaryRobot.id,
-        time: new Date().toISOString(),
-        direction: 'out',
-        chatId,
-        messageId: msgId,
-        msgType: 'interactive',
-        cardTitle: '⚠️ 消息识别失败',
-        status: 'ok'
-      });
-    } catch { /* 通知失败不抛出 */ }
-    throw err;
+      action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
+    } catch (err) {
+      // AI 调用失败，更新入站日志状态，发送失败卡片
+      const list = botLogs.get(primaryRobot.id);
+      const inLog = list?.find((l) => l.id === inLogId);
+      if (inLog) {
+        inLog.status = 'failed';
+        inLog.error = err instanceof Error ? err.message : 'AI 调用失败';
+      }
+      try {
+        const msgId = await sendRobotCard({
+          title: '⚠️ 消息识别失败',
+          lines: [
+            `**原始消息**：${text}`,
+            `**失败原因**：AI 模型调用异常，请检查模型配置`
+          ],
+          color: 'red'
+        }, chatId);
+        pushBotLog({
+          id: nanoid(),
+          robotId: primaryRobot.id,
+          time: new Date().toISOString(),
+          direction: 'out',
+          chatId,
+          messageId: msgId,
+          msgType: 'interactive',
+          cardTitle: '⚠️ 消息识别失败',
+          status: 'ok'
+        });
+      } catch { /* 通知失败不抛出 */ }
+      throw err;
+    }
+
+    // 仅 AI 路径下异步刷新余额，不阻塞主流程
+    void checkModelBalances();
   }
 
-  // LLM 调用后异步刷新余额，不阻塞主流程
-  void checkModelBalances();
+  if (!action) {
+    return null;
+  }
 
   // 更新入站日志的识别意图
   const list = botLogs.get(primaryRobot.id);
@@ -1968,6 +2012,50 @@ async function processBotMessage(
           amount: Math.abs(reward.amount),
           reason: action.reason ?? `完成${reward.keyword}`,
           type: 'reward',
+          source: 'bot',
+          actorUserId: senderOpenId
+        });
+        break;
+      }
+      case 'manual_grant_daily_allowance': {
+        if (!targetChild) throw new Error('未找到目标小孩或无权限');
+        await applyTransaction({
+          childId: targetChild.id,
+          amount: targetChild.dailyAllowance,
+          reason: '手动发放零花钱',
+          type: 'daily',
+          source: 'bot',
+          actorUserId: senderOpenId
+        });
+
+        const today = new Date().toISOString().slice(0, 10);
+        store.update((draft) => {
+          if (!draft.config.lastDailyGrantTimes) {
+            draft.config.lastDailyGrantTimes = {};
+          }
+          draft.config.lastDailyGrantTimes[targetChild.id] = today;
+        });
+        break;
+      }
+      case 'increase_balance': {
+        if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
+        await applyTransaction({
+          childId: targetChild.id,
+          amount: Math.abs(action.amount),
+          reason: '手动余额增加',
+          type: 'manual',
+          source: 'bot',
+          actorUserId: senderOpenId
+        });
+        break;
+      }
+      case 'decrease_balance': {
+        if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
+        await applyTransaction({
+          childId: targetChild.id,
+          amount: -Math.abs(action.amount),
+          reason: '手动余额减少',
+          type: 'manual',
           source: 'bot',
           actorUserId: senderOpenId
         });
