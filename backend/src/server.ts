@@ -1215,7 +1215,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.22' });
+  res.json({ success: true, version: '0.3.23' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2263,12 +2263,25 @@ async function processBotMessage(
         const child = findChildById(targetChild.id);
         const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
         if (!reward) {
+          if (action.amount !== undefined) {
+            await applyTransaction({
+              childId: targetChild.id,
+              amount: Math.abs(action.amount),
+              reason: action.reason ?? action.rewardKeyword,
+              type: 'reward',
+              source: 'bot',
+              actorUserId: senderOpenId,
+              actorDisplayName: senderDisplayName,
+              chatIdOverride: chatId
+            });
+            break;
+          }
           const msgId = await sendRobotCard({
             title: '❓ 未匹配到奖励规则',
             lines: [
               `**原始消息**：${text}`,
-              `**识别结果**：识别为奖励触发，但未找到“${action.rewardKeyword}”对应的奖励规则。`,
-              `**建议**：如果你的意思是直接调整余额，请使用“增加5元，因为表现良好”或“减少5元，因为录入错误”。`
+              `**识别结果**：识别为奖励触发，但未找到“${action.rewardKeyword}”对应的奖励规则，且 AI 未给出可直接执行的金额。`,
+              `**建议**：如果你的意思是直接调整余额，请直接说“增加5元，因为表现良好”或“减少5元，因为录入错误”。`
             ],
             color: 'orange'
           }, chatId, targetChild.id);

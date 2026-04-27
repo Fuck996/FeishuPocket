@@ -258,6 +258,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
   识别规则:
   1) amount 单位是元，输出 number。若用户说“8块”“8元钱”，统一转成 8。
   2) deduct_expense 的 amount 始终输出正数，符号由业务层处理。
+  2.1) reward_from_message 如果用户原话里明确给了奖励金额，也要返回 amount，不能省略。
   3) 设置每周通知时，hour/minute 都必须返回，且是 0-23 / 0-59。
   4) childName 由业务层根据机器人绑定确定，不要返回 childName。
   5) 对口语化表达也要识别，例如：
@@ -267,7 +268,8 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
     - “增加5元 因为表现良好” => increase_balance
     - “减少5元 因为初始金额设置错误” => decrease_balance
     - “完成家务了” => reward_from_message
-      - “查询余额” / “余额” => query_balance
+    - “表现良好，奖励5元” => reward_from_message，且 amount=5
+    - “查询余额” / “余额” => query_balance
   6) 仅当信息不足或语义冲突时返回 unknown。
 
   示例A: "设置每日零花钱12元" -> {"intent":"set_daily_allowance","amount":12}
@@ -280,6 +282,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
   示例H: "查余额" -> {"intent":"query_balance"}
   示例I: "增加5元，因为表现良好" -> {"intent":"increase_balance","amount":5,"reason":"表现良好"}
   示例J: "减少5元，因为初始金额设置错误" -> {"intent":"decrease_balance","amount":5,"reason":"初始金额设置错误"}
+  示例K: "表现良好，奖励5元" -> {"intent":"reward_from_message","rewardKeyword":"表现良好","amount":5,"reason":"表现良好"}
 
   消息: ${message}`;
 
