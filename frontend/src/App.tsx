@@ -43,6 +43,7 @@ type NavTab = 'stats' | 'models' | 'robots' | 'children';
 type NoticeType = 'success' | 'error' | 'info' | 'warning';
 type RobotView = { mode: 'list' } | { mode: 'create' } | { mode: 'edit'; robotId: string };
 type ChildView = { mode: 'list' } | { mode: 'create' } | { mode: 'edit'; childId: string };
+type ModelPageView = 'list' | 'create' | 'edit';
 
 interface NoticeItem {
   id: number;
@@ -70,6 +71,7 @@ interface ModelDraft {
   apiUrl: string;
   apiKey: string;
   modelId: string;
+  hasApiKey: boolean;
 }
 
 interface PromptDraft {
@@ -171,7 +173,7 @@ function getModelStatusLabel(status: ModelConfig['status']): string {
     case 'testing':
       return '测试中';
     case 'disconnected':
-      return '已断开';
+      return '已配置';
     case 'unconfigured':
       return '未配置';
     default:
@@ -210,7 +212,8 @@ function createModelDraft(provider: ModelConfig['provider'] = 'deepseek'): Model
     provider,
     apiUrl: defaultApiUrlByProvider[provider],
     apiKey: '',
-    modelId: ''
+    modelId: '',
+    hasApiKey: false
   };
 }
 
@@ -392,6 +395,8 @@ function App() {
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [discoveredModelIds, setDiscoveredModelIds] = useState<string[]>([]);
   const [discoveringModels, setDiscoveringModels] = useState(false);
+  const [modelPageView, setModelPageView] = useState<ModelPageView>('list');
+  const [mcpExpanded, setMcpExpanded] = useState(false);
 
   const [promptDraft, setPromptDraft] = useState<PromptDraft>(createPromptDraft());
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
@@ -579,6 +584,20 @@ function App() {
   function closeChildEditor(): void {
     setChildView({ mode: 'list' });
     setChildDraft(createEmptyChildDraft(defaultDailyAllowance));
+  }
+
+  function openCreateModel(): void {
+    setModelDraft(createModelDraft());
+    setEditingModelId(null);
+    setDiscoveredModelIds([]);
+    setModelPageView('create');
+  }
+
+  function closeModelEditor(): void {
+    setModelPageView('list');
+    setEditingModelId(null);
+    setModelDraft(createModelDraft());
+    setDiscoveredModelIds([]);
   }
 
   async function handleLoginSubmit(event: FormEvent): Promise<void> {
@@ -786,7 +805,7 @@ function App() {
           name: modelDraft.name.trim(),
           provider: modelDraft.provider,
           apiUrl: modelDraft.apiUrl.trim(),
-          apiKey: modelDraft.apiKey.trim() || undefined,
+          ...(modelDraft.apiKey.trim() ? { apiKey: modelDraft.apiKey.trim() } : {}),
           modelId: modelDraft.modelId.trim()
         });
         showNotice('模型配置已更新');
@@ -797,15 +816,12 @@ function App() {
           apiUrl: modelDraft.apiUrl.trim(),
           apiKey: modelDraft.apiKey.trim(),
           modelId: modelDraft.modelId.trim(),
-          isBuiltIn: false,
-          status: 'unconfigured'
+          isBuiltIn: false
         });
         showNotice('模型配置已新增');
       }
 
-      setEditingModelId(null);
-      setModelDraft(createModelDraft());
-      setDiscoveredModelIds([]);
+      closeModelEditor();
       await reloadData(user);
     } catch (error) {
       handleRequestError(error);
@@ -990,9 +1006,9 @@ function App() {
     );
   }
 
-  function renderModelsPage() {
+  function renderModelList() {
     return (
-      <div className="page-stack">
+      <div className="page-stack page-stack--with-fab">
         <section className="panel-card">
           <div className="panel-card__header">
             <div>
@@ -1003,90 +1019,22 @@ function App() {
 
           {user?.role !== 'admin' ? (
             <div className="empty-card">当前账号没有模型配置权限。</div>
+          ) : models.length === 0 ? (
+            <div className="empty-card">暂无模型配置，点击右下角按钮新增。</div>
           ) : (
-            <>
-              <form className="form-grid" onSubmit={handleModelSave}>
-                <div className="form-row">
-                  <label>
-                    配置名称
-                    <input value={modelDraft.name} onChange={(event) => setModelDraft((current) => ({ ...current, name: event.target.value }))} required />
-                  </label>
-                  <label>
-                    服务商
-                    <select
-                      value={modelDraft.provider}
-                      onChange={(event) => {
-                        const provider = event.target.value as ModelConfig['provider'];
-                        setEditingModelId(null);
-                        setModelDraft(createModelDraft(provider));
-                        setDiscoveredModelIds([]);
-                      }}
-                    >
-                      <option value="deepseek">DeepSeek</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="google">Google</option>
-                      <option value="custom">自定义</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div className="form-row">
-                  <label>
-                    API 地址
-                    <input value={modelDraft.apiUrl} onChange={(event) => setModelDraft((current) => ({ ...current, apiUrl: event.target.value }))} required />
-                  </label>
-                  <label>
-                    API Key
-                    <input type="password" value={modelDraft.apiKey} onChange={(event) => setModelDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder={editingModelId ? '留空表示不修改' : ''} />
-                  </label>
-                </div>
-
-                <div className="form-row form-row--tight">
-                  <label>
-                    模型 ID
-                    <input value={modelDraft.modelId} onChange={(event) => setModelDraft((current) => ({ ...current, modelId: event.target.value }))} required />
-                  </label>
-                  <button type="button" className="secondary-button" onClick={handleDiscoverModels} disabled={discoveringModels}>
-                    {discoveringModels ? '获取中...' : '通过 API 拉取模型'}
-                  </button>
-                </div>
-
-                {discoveredModelIds.length > 0 && (
-                  <label>
-                    自动发现的模型
-                    <select value={modelDraft.modelId} onChange={(event) => setModelDraft((current) => ({ ...current, modelId: event.target.value }))}>
-                      {discoveredModelIds.map((modelId) => (
-                        <option key={modelId} value={modelId}>{modelId}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-
-                <div className="action-row">
-                  <button type="submit">{editingModelId ? '保存模型配置' : '新增模型配置'}</button>
-                  {editingModelId && (
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => {
-                        setEditingModelId(null);
-                        setModelDraft(createModelDraft());
-                        setDiscoveredModelIds([]);
-                      }}
-                    >
-                      取消编辑
-                    </button>
-                  )}
-                </div>
-              </form>
-
-              <div className="stack-list">
-                {models.map((model) => (
-                  <article className="list-card" key={model.id}>
-                    <div>
-                      <div className="list-card__title">{model.name}</div>
-                      <div className="list-card__meta">{model.provider} · {model.modelId || '未设置模型 ID'} · {getModelStatusLabel(model.status)}</div>
+            <div className="stack-list">
+              {models.map((model) => (
+                <article className="list-card" key={model.id}>
+                  <div>
+                    <div className="list-card__title">
+                      {model.name}
+                      {model.balance !== undefined && (
+                        <span className="model-balance">¥{model.balance.toFixed(2)}</span>
+                      )}
                     </div>
+                    <div className="list-card__meta">{model.provider} · {model.modelId || '未设置模型 ID'} · {getModelStatusLabel(model.status)}</div>
+                  </div>
+                  {user?.role === 'admin' && (
                     <div className="list-card__actions">
                       <button
                         type="button"
@@ -1098,9 +1046,11 @@ function App() {
                             provider: model.provider,
                             apiUrl: model.apiUrl,
                             apiKey: '',
-                            modelId: model.modelId ?? ''
+                            modelId: model.modelId ?? '',
+                            hasApiKey: model.hasApiKey ?? false
                           });
                           setDiscoveredModelIds([]);
+                          setModelPageView('edit');
                         }}
                       >
                         编辑
@@ -1126,117 +1076,229 @@ function App() {
                         </button>
                       )}
                     </div>
-                  </article>
-                ))}
-              </div>
-            </>
+                  )}
+                </article>
+              ))}
+            </div>
           )}
         </section>
 
-        <section className="panel-card">
+        <article
+          className="panel-card panel-card--clickable"
+          onClick={() => setMcpExpanded(!mcpExpanded)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && setMcpExpanded(!mcpExpanded)}
+        >
           <div className="panel-card__header">
             <div>
               <p className="section-eyebrow">MCP 模板</p>
               <h2>提示词与服务模板</h2>
             </div>
+            <span className="mcp-toggle-hint">{prompts.length} 个模板 · {mcpExpanded ? '收起 ▲' : '展开 ▼'}</span>
           </div>
+        </article>
 
-          {user?.role === 'admin' && (
-            <form className="form-grid" onSubmit={handlePromptSave}>
-              <div className="form-row">
+        {mcpExpanded && (
+          <section className="panel-card">
+            {user?.role === 'admin' && (
+              <form className="form-grid" onSubmit={handlePromptSave}>
+                <div className="form-row">
+                  <label>
+                    模板名称
+                    <input value={promptDraft.name} onChange={(event) => setPromptDraft((current) => ({ ...current, name: event.target.value }))} required />
+                  </label>
+                  <label>
+                    用途
+                    <select value={promptDraft.purpose} onChange={(event) => setPromptDraft((current) => ({ ...current, purpose: event.target.value as PromptTemplate['purpose'] }))}>
+                      <option value="vscode-chat">工作总结</option>
+                      <option value="daily">日报快报</option>
+                      <option value="weekly">周报总结</option>
+                      <option value="incident">事件报告</option>
+                      <option value="optimization">优化建议</option>
+                      <option value="pocket-money">零花钱识别</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                  </label>
+                </div>
                 <label>
-                  模板名称
-                  <input value={promptDraft.name} onChange={(event) => setPromptDraft((current) => ({ ...current, name: event.target.value }))} required />
+                  模板内容
+                  <textarea value={promptDraft.content} onChange={(event) => setPromptDraft((current) => ({ ...current, content: event.target.value }))} rows={8} required />
                 </label>
-                <label>
-                  用途
-                  <select value={promptDraft.purpose} onChange={(event) => setPromptDraft((current) => ({ ...current, purpose: event.target.value as PromptTemplate['purpose'] }))}>
-                    <option value="vscode-chat">工作总结</option>
-                    <option value="daily">日报快报</option>
-                    <option value="weekly">周报总结</option>
-                    <option value="incident">事件报告</option>
-                    <option value="optimization">优化建议</option>
-                    <option value="pocket-money">零花钱识别</option>
-                    <option value="custom">自定义</option>
-                  </select>
-                </label>
-              </div>
-              <label>
-                模板内容
-                <textarea value={promptDraft.content} onChange={(event) => setPromptDraft((current) => ({ ...current, content: event.target.value }))} rows={8} required />
-              </label>
-              <div className="action-row">
-                <button type="submit">{editingPromptId ? '保存模板' : '新增模板'}</button>
-                {editingPromptId && (
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => {
-                      setEditingPromptId(null);
-                      setPromptDraft(createPromptDraft());
-                    }}
-                  >
-                    取消编辑
-                  </button>
-                )}
-              </div>
-            </form>
-          )}
-
-          <div className="stack-list">
-            {prompts.map((prompt) => (
-              <article className="list-card list-card--vertical" key={prompt.id}>
-                <div className="list-card__title-row">
-                  <div>
-                    <div className="list-card__title">{prompt.name}</div>
-                    <div className="list-card__meta">{prompt.purpose} · {prompt.isBuiltIn ? '内置' : '自定义'}</div>
-                  </div>
-                  {user?.role === 'admin' && (
-                    <div className="list-card__actions">
-                      <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => {
-                          setEditingPromptId(prompt.id);
-                          setPromptDraft({
-                            name: prompt.name,
-                            purpose: prompt.purpose,
-                            content: prompt.content
-                          });
-                        }}
-                      >
-                        编辑
-                      </button>
-                      {!prompt.isBuiltIn && (
-                        <button
-                          type="button"
-                          className="danger-button"
-                          onClick={async () => {
-                            if (!user || !window.confirm('确认删除这个模板吗？')) {
-                              return;
-                            }
-                            try {
-                              await deletePrompt(prompt.id);
-                              await reloadData(user);
-                              showNotice('模板已删除', 'warning');
-                            } catch (error) {
-                              handleRequestError(error);
-                            }
-                          }}
-                        >
-                          删除
-                        </button>
-                      )}
-                    </div>
+                <div className="action-row">
+                  <button type="submit">{editingPromptId ? '保存模板' : '新增模板'}</button>
+                  {editingPromptId && (
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => {
+                        setEditingPromptId(null);
+                        setPromptDraft(createPromptDraft());
+                      }}
+                    >
+                      取消编辑
+                    </button>
                   )}
                 </div>
-                <div className="template-preview">{prompt.content}</div>
-              </article>
-            ))}
+              </form>
+            )}
+
+            <div className="stack-list">
+              {prompts.map((prompt) => (
+                <article className="list-card list-card--vertical" key={prompt.id}>
+                  <div className="list-card__title-row">
+                    <div>
+                      <div className="list-card__title">{prompt.name}</div>
+                      <div className="list-card__meta">{prompt.purpose} · {prompt.isBuiltIn ? '内置' : '自定义'}</div>
+                    </div>
+                    {user?.role === 'admin' && (
+                      <div className="list-card__actions">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => {
+                            setEditingPromptId(prompt.id);
+                            setPromptDraft({
+                              name: prompt.name,
+                              purpose: prompt.purpose,
+                              content: prompt.content
+                            });
+                          }}
+                        >
+                          编辑
+                        </button>
+                        {!prompt.isBuiltIn && (
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={async () => {
+                              if (!user || !window.confirm('确认删除这个模板吗？')) {
+                                return;
+                              }
+                              try {
+                                await deletePrompt(prompt.id);
+                                await reloadData(user);
+                                showNotice('模板已删除', 'warning');
+                              } catch (error) {
+                                handleRequestError(error);
+                              }
+                            }}
+                          >
+                            删除
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="template-preview">{prompt.content}</div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {user?.role === 'admin' && (
+          <button type="button" className="fab-button" onClick={openCreateModel}>
+            <AppIcon name="plus" size={22} />
+            <span>新增模型</span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  function renderModelEditor() {
+    const isCreate = modelPageView === 'create';
+    const editorTitle = isCreate ? '新增模型' : (models.find((m) => m.id === editingModelId)?.name ?? '模型配置');
+    return (
+      <div className="page-stack">
+        <section className="detail-header">
+          <button type="button" className="back-button" onClick={closeModelEditor}>
+            <AppIcon name="back" size={20} />
+          </button>
+          <div>
+            <p className="section-eyebrow">模型配置</p>
+            <h1>{editorTitle}</h1>
           </div>
+        </section>
+
+        <section className="panel-card">
+          <form className="form-grid" onSubmit={handleModelSave}>
+            <div className="form-row">
+              <label>
+                配置名称
+                <input value={modelDraft.name} onChange={(event) => setModelDraft((current) => ({ ...current, name: event.target.value }))} required />
+              </label>
+              <label>
+                服务商
+                <select
+                  value={modelDraft.provider}
+                  onChange={(event) => {
+                    const provider = event.target.value as ModelConfig['provider'];
+                    setModelDraft({ ...createModelDraft(provider), name: modelDraft.name });
+                    setDiscoveredModelIds([]);
+                  }}
+                >
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="google">Google</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="form-row">
+              <label>
+                API 地址
+                <input value={modelDraft.apiUrl} onChange={(event) => setModelDraft((current) => ({ ...current, apiUrl: event.target.value }))} required />
+              </label>
+              <label>
+                API Key
+                <input
+                  type="password"
+                  value={modelDraft.apiKey}
+                  onChange={(event) => setModelDraft((current) => ({ ...current, apiKey: event.target.value }))}
+                  placeholder={modelDraft.hasApiKey ? '••••• 已保存（留空则不修改）' : '输入 API Key'}
+                />
+              </label>
+            </div>
+
+            <div className="form-row form-row--tight">
+              <label>
+                模型 ID
+                <input value={modelDraft.modelId} onChange={(event) => setModelDraft((current) => ({ ...current, modelId: event.target.value }))} required />
+              </label>
+              <button type="button" className="secondary-button" onClick={handleDiscoverModels} disabled={discoveringModels}>
+                {discoveringModels ? '获取中...' : '通过 API 拉取模型'}
+              </button>
+            </div>
+
+            {discoveredModelIds.length > 0 && (
+              <label>
+                自动发现的模型
+                <select value={modelDraft.modelId} onChange={(event) => setModelDraft((current) => ({ ...current, modelId: event.target.value }))}>
+                  {discoveredModelIds.map((modelId) => (
+                    <option key={modelId} value={modelId}>{modelId}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <div className="action-row">
+              <button type="submit">{isCreate ? '新增模型配置' : '保存模型配置'}</button>
+              <button type="button" className="ghost-button" onClick={closeModelEditor}>取消</button>
+            </div>
+          </form>
         </section>
       </div>
     );
+  }
+
+  function renderModelsPage() {
+    if (modelPageView !== 'list') {
+      return renderModelEditor();
+    }
+    return renderModelList();
   }
 
   function renderRobotList() {

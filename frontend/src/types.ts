@@ -79,6 +79,8 @@ export interface ModelConfig {
   isBuiltIn: boolean;
   status: 'connected' | 'testing' | 'disconnected' | 'unconfigured';
   lastTestedAt?: string;
+  balance?: number;
+  balanceCheckedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

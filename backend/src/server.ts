@@ -607,7 +607,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.6' });
+  res.json({ success: true, version: '0.2.7' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1472,7 +1472,7 @@ app.post('/api/models', requireAuth, requireRole('admin'), async (req: AuthedReq
       apiKey,
       modelId,
       isBuiltIn: isBuiltIn ?? false,
-      status: 'unconfigured'
+      status: (apiKey && modelId) ? 'disconnected' : 'unconfigured'
     });
 
     res.json({ success: true, data: { ...model, apiKey: undefined, hasApiKey: !!model.apiKey } });
@@ -1492,6 +1492,10 @@ app.put('/api/models/:id', requireAuth, requireRole('admin'), async (req: Authed
   }
 
   try {
+    // 若提供了新的 apiKey，重置状态为已配置（待测试）
+    if (updates.apiKey) {
+      updates.status = 'disconnected';
+    }
     const updated = store.updateModel(id, updates);
     if (!updated) {
       res.status(500).json({ success: false, error: '更新模型失败' });

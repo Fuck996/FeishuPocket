@@ -100,6 +100,8 @@ export interface ModelConfig {
   isBuiltIn: boolean; // 是否推荐模型
   status: 'connected' | 'testing' | 'disconnected' | 'unconfigured'; // 连接状态
   lastTestedAt?: string;
+  balance?: number;           // 最近查询到的余额（元）
+  balanceCheckedAt?: string;  // 余额最后检查时间
   createdAt: string;
   updatedAt: string;
 }

@@ -303,6 +303,30 @@ p {
   font-weight: 700;
 }
 
+.model-balance {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--teal);
+  background: rgba(56, 161, 105, 0.10);
+  border-radius: 8px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+
+.mcp-toggle-hint {
+  font-size: 12px;
+  color: var(--text-sub);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.panel-card--clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
 .list-card__actions,
 .topbar-card__actions,
 .action-row,
@@ -495,9 +519,9 @@ button:disabled {
 
 .child-card__avatar,
 .profile-head__avatar {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
+  width: 76px;
+  height: 76px;
+  border-radius: 24px;
   object-fit: cover;
   flex-shrink: 0;
   background: rgba(214, 107, 44, 0.08);
@@ -793,8 +817,6 @@ button:disabled {
     box-shadow: 0 40px 100px rgba(69, 42, 17, 0.28), 0 0 0 1px rgba(92, 72, 41, 0.16);
     overflow: hidden;
     overflow-y: auto;
-    /* transform 让 position:fixed 子元素相对于此容器定位 */
-    transform: translateZ(0);
     scrollbar-width: none;
   }
 
@@ -809,12 +831,11 @@ button:disabled {
     border-radius: 44px;
     box-shadow: 0 40px 100px rgba(69, 42, 17, 0.28), 0 0 0 1px rgba(92, 72, 41, 0.16);
     overflow: hidden;
-    transform: translateZ(0);
   }
 
-  /* fixed 元素现在相对于 .app-shell (390px) 定位，重置偏移量 */
+  /* fixed 元素使用视口坐标，通过 calc 居中对齐到 390px 应用框 */
   .fab-button {
-    right: 22px;
+    right: calc((100vw - 390px) / 2 + 22px);
   }
 
   .bottom-nav {
@@ -824,7 +845,7 @@ button:disabled {
   }
 
   .toast-stack {
-    right: 14px;
+    right: calc((100vw - 390px) / 2 + 14px);
     width: 290px;
   }
 }

@@ -200,7 +200,7 @@ export async function getModels(): Promise<ModelConfig[]> {
   return result.data;
 }
 
-export async function createModel(payload: Omit<ModelConfig, 'id' | 'createdAt' | 'updatedAt'>): Promise<ModelConfig> {
+export async function createModel(payload: Omit<ModelConfig, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { status?: ModelConfig['status'] }): Promise<ModelConfig> {
   const result = await request<{ success: true; data: ModelConfig }>('/api/models', {
     method: 'POST',
     body: JSON.stringify(payload)

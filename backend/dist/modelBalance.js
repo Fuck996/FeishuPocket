@@ -81,11 +81,13 @@ export async function checkAllModelBalances() {
         try {
             const balance = await fetchModelBalance(model);
             await notifyLowBalanceIfNeeded(model, balance);
-            // 更新模型测试时间
+            // 更新模型余额与测试时间
             if (balance !== null) {
                 store.updateModel(model.id, {
                     status: 'connected',
-                    lastTestedAt: new Date().toISOString()
+                    lastTestedAt: new Date().toISOString(),
+                    balance,
+                    balanceCheckedAt: new Date().toISOString()
                 });
             }
         }
