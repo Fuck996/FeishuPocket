@@ -82,7 +82,20 @@ export class JsonStore {
         const parsed = JSON.parse(raw);
         this.data = {
             users: parsed.users ?? [],
-            children: parsed.children ?? [],
+            children: (parsed.children ?? []).map((c) => ({
+                id: c.id,
+                name: c.name,
+                avatar: c.avatar ?? '',
+                feishuAvatarKey: c.feishuAvatarKey,
+                feishuAvatarSource: c.feishuAvatarSource,
+                balance: c.balance ?? 0,
+                dailyAllowance: c.dailyAllowance ?? (parsed.config?.defaultDailyAllowance ?? 10),
+                dailyGrantHour: c.dailyGrantHour,
+                dailyGrantMinute: c.dailyGrantMinute,
+                rewardRules: c.rewardRules ?? [],
+                createdAt: c.createdAt,
+                updatedAt: c.updatedAt
+            })),
             robots: (parsed.robots ?? []).map((r) => ({
                 id: r.id,
                 name: r.name,

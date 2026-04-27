@@ -11,6 +11,8 @@ export interface ChildProfile {
   id: string;
   name: string;
   avatar: string;
+  feishuAvatarKey?: string;
+  feishuAvatarSource?: string;
   balance: number;
   dailyAllowance: number;
   dailyGrantHour?: number;   // 每日零花钱发放时刻（0-23），默认 8

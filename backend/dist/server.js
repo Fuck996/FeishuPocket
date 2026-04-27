@@ -531,6 +531,75 @@ function resolveAvatarForFeishu(child) {
     const encodedName = encodeURIComponent(child.name || 'Child');
     return `https://ui-avatars.com/api/?name=${encodedName}&background=E2E8F0&color=334155&size=256&rounded=true`;
 }
+async function uploadFeishuImageByUrl(tenantAccessToken, imageUrl) {
+    try {
+        const imageResponse = await fetch(imageUrl);
+        if (!imageResponse.ok) {
+            return undefined;
+        }
+        const contentType = imageResponse.headers.get('content-type') ?? 'application/octet-stream';
+        if (!contentType.startsWith('image/')) {
+            return undefined;
+        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        if (!imageBuffer.byteLength || imageBuffer.byteLength > 10 * 1024 * 1024) {
+            return undefined;
+        }
+        const form = new FormData();
+        form.append('image_type', 'message');
+        form.append('image', new Blob([imageBuffer], { type: contentType }), 'child-avatar');
+        const uploadResp = await fetch('https://open.feishu.cn/open-apis/im/v1/images', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${tenantAccessToken}`
+            },
+            body: form
+        });
+        if (!uploadResp.ok) {
+            return undefined;
+        }
+        const uploadData = await uploadResp.json();
+        if (uploadData.code !== 0) {
+            return undefined;
+        }
+        return uploadData.data?.image_key;
+    }
+    catch {
+        return undefined;
+    }
+}
+async function ensureChildFeishuAvatarKey(child) {
+    const avatarUrl = resolveAvatarForFeishu(child);
+    if (child.feishuAvatarKey && child.feishuAvatarSource === avatarUrl) {
+        return child.feishuAvatarKey;
+    }
+    const robot = store.getSnapshot().robots.find((r) => r.enabled
+        && r.feishuMode !== 'webhook'
+        && r.feishuAppId
+        && r.feishuAppSecret
+        && r.childIds.includes(child.id));
+    if (!robot) {
+        return undefined;
+    }
+    const tenantAccessToken = await getFeishuTenantAccessToken(robot);
+    if (!tenantAccessToken) {
+        return undefined;
+    }
+    const imageKey = await uploadFeishuImageByUrl(tenantAccessToken, avatarUrl);
+    if (!imageKey) {
+        return undefined;
+    }
+    store.update((draft) => {
+        const target = draft.children.find((item) => item.id === child.id);
+        if (!target) {
+            return;
+        }
+        target.feishuAvatarKey = imageKey;
+        target.feishuAvatarSource = avatarUrl;
+        target.updatedAt = new Date().toISOString();
+    });
+    return imageKey;
+}
 function formatDateTimeCn(iso) {
     const date = new Date(iso);
     return {
@@ -581,6 +650,8 @@ function buildBalanceSnapshotCardPayload(child) {
     }
     const actorDisplay = resolveActorDisplay(latest.source, latest.actorUserId, latest.actorDisplayName);
     const { date, time } = formatDateTimeCn(latest.createdAt);
+    const avatarUrl = resolveAvatarForFeishu(child);
+    const avatarKey = child.feishuAvatarKey;
     basePayload.lines = [
         `**对象**：${child.name}`,
         `💰 **最近变动金额**：${amountWithSign(latest.amount)}元   |   **当前余额**：${child.balance.toFixed(2)}元`,
@@ -590,13 +661,15 @@ function buildBalanceSnapshotCardPayload(child) {
     ];
     const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
     if (templateId) {
-        const avatarUrl = resolveAvatarForFeishu(child);
         basePayload.templateId = templateId;
         basePayload.templateVariable = {
             child_avatar: avatarUrl,
             child_avatar_url: avatarUrl,
             childAvatar: avatarUrl,
             avatar_url: avatarUrl,
+            child_avatar_key: avatarKey,
+            childAvatarKey: avatarKey,
+            avatar_key: avatarKey,
             child_name: child.name,
             balance_after: `${child.balance.toFixed(2)}元`,
             change_amount: `${amountWithSign(latest.amount)}元`,
@@ -749,6 +822,8 @@ async function applyTransaction(input) {
     const updatedChild = store.getSnapshot().children.find((item) => item.id === input.childId);
     const currentBalance = updatedChild?.balance ?? child.balance;
     const { date, time } = formatDateTimeCn(transaction.createdAt);
+    const avatarUrl = resolveAvatarForFeishu(child);
+    const avatarKey = await ensureChildFeishuAvatarKey(child);
     const payload = {
         title: '零花钱金额变动通知',
         lines: [
@@ -768,13 +843,15 @@ async function applyTransaction(input) {
     // 若配置了模板 ID，优先走模板动态渲染
     const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
     if (templateId) {
-        const avatarUrl = resolveAvatarForFeishu(child);
         payload.templateId = templateId;
         payload.templateVariable = {
             child_avatar: avatarUrl,
             child_avatar_url: avatarUrl,
             childAvatar: avatarUrl,
             avatar_url: avatarUrl,
+            child_avatar_key: avatarKey,
+            childAvatarKey: avatarKey,
+            avatar_key: avatarKey,
             child_name: child.name,
             balance_after: `${currentBalance.toFixed(2)}元`,
             change_amount: `${amountWithSign(input.amount)}元`,
@@ -1164,7 +1241,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.29' });
+    res.json({ success: true, version: '0.3.30' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1271,6 +1348,8 @@ app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
         id: nanoid(),
         name,
         avatar: avatar ?? '',
+        feishuAvatarKey: undefined,
+        feishuAvatarSource: undefined,
         balance: 0,
         dailyAllowance: dailyAllowance ?? store.getSnapshot().config.defaultDailyAllowance,
         dailyGrantHour: dailyGrantHour !== undefined ? Number(dailyGrantHour) : undefined,
@@ -1296,7 +1375,12 @@ app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) 
             child.name = name;
         }
         if (avatar !== undefined) {
+            const avatarChanged = child.avatar !== avatar;
             child.avatar = avatar;
+            if (avatarChanged) {
+                child.feishuAvatarKey = undefined;
+                child.feishuAvatarSource = undefined;
+            }
         }
         if (dailyGrantHour !== undefined) {
             child.dailyGrantHour = Number(dailyGrantHour);
