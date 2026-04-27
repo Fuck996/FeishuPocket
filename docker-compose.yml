@@ -12,8 +12,6 @@ services:
       - HOST=0.0.0.0
       - JWT_SECRET=${JWT_SECRET}
       - DATABASE_PATH=/app/data/store.json
-      - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - TZ=${TZ:-Asia/Shanghai}
     volumes:
       # 数据持久化 - 避免每次更新都丢失

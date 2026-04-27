@@ -64,6 +64,8 @@ export interface SystemConfig {
   ignoreBotUserIds: string[];
   defaultDailyAllowance: number;
   lastDailyGrantDate?: string;
+  // 系统配置 - 由管理员在 UI 中设置
+  feishuWebhookUrl?: string; // 飞书群机器人回调地址
 }
 
 export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';

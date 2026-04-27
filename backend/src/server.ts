@@ -285,7 +285,9 @@ async function applyTransaction(input: {
     draft.transactions.push(transaction);
   });
 
-  await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+  // 从数据库读取飞书 webhook，而非环境变量
+  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+  await sendFeishuCard(webhookUrl, {
     title: '零花钱金额变动通知',
     lines: [
       `**对象**：${child.name}`,
@@ -411,7 +413,8 @@ async function runWeeklySummary(): Promise<void> {
       draft.weeklySummaries.push(summary);
     });
 
-    await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+    const summaryWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+    await sendFeishuCard(summaryWebhookUrl, {
       title: `${child.name}上周零花钱统计`,
       lines: [
         `**统计周期**：${range.startText} ~ ${range.endText}`,
@@ -704,7 +707,9 @@ app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async 
   });
 
   const child = findChildById(childId);
-  await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+  // 从数据库读取飞书 webhook，而非环境变量
+  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+  await sendFeishuCard(webhookUrl, {
     title: '系统操作反馈：每日零花钱额度',
     lines: [
       `**识别结果**：成功`,
@@ -741,7 +746,9 @@ app.put('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req
   });
 
   const child = findChildById(childId);
-  await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+  // 从数据库读取飞书 webhook，而非环境变量
+  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+  await sendFeishuCard(webhookUrl, {
     title: '系统操作反馈：额外奖励规则',
     lines: [
       `**识别结果**：成功`,
@@ -767,7 +774,9 @@ app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (r
 
   scheduler.updateWeeklySchedule(Number(hour), Number(minute));
 
-  await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+  // 从数据库读取飞书 webhook，而非环境变量
+  const notifyWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+  await sendFeishuCard(notifyWebhookUrl, {
     title: '系统操作反馈：每周统计通知',
     lines: [
       `**识别结果**：成功`,
@@ -780,6 +789,22 @@ app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (r
 
 app.get('/api/config', requireAuth, (_req, res) => {
   res.json({ success: true, data: store.getSnapshot().config });
+});
+
+/**
+ * PUT /api/config/system
+ * 由管理员在 UI 中配置系统级参数
+ */
+app.put('/api/config/system', requireAuth, requireRole('admin'), (req: AuthedRequest, res) => {
+  const { feishuWebhookUrl } = req.body as { feishuWebhookUrl?: string };
+
+  store.update((draft) => {
+    if (feishuWebhookUrl !== undefined) {
+      draft.config.feishuWebhookUrl = feishuWebhookUrl;
+    }
+  });
+
+  res.json({ success: true, message: '系统配置已更新' });
 });
 
 app.get('/api/transactions', requireAuth, (req: AuthedRequest, res) => {
@@ -884,7 +909,8 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         child.dailyAllowance = action.amount as number;
         child.updatedAt = new Date().toISOString();
       });
-      await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+      const dailyAllowanceWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+      await sendFeishuCard(dailyAllowanceWebhookUrl, {
         title: '系统操作反馈：每日额度调整',
         lines: [
           `**识别结果**：成功`,
@@ -917,7 +943,8 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
         child.rewardRules.push(rule);
       });
-      await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+      const rewardWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+      await sendFeishuCard(rewardWebhookUrl, {
         title: '系统操作反馈：额外奖励设置',
         lines: [
           `**识别结果**：成功`,
@@ -960,7 +987,8 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         };
       });
       scheduler.updateWeeklySchedule(action.hour, action.minute);
-      await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+      const weeklyNotifyWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
+      await sendFeishuCard(weeklyNotifyWebhookUrl, {
         title: '系统操作反馈：每周统计通知',
         lines: [
           `**识别结果**：成功`,
