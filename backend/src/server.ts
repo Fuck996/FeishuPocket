@@ -680,12 +680,18 @@ async function ensureChildFeishuAvatarKey(child: ChildProfile): Promise<string |
     return child.feishuAvatarKey;
   }
 
-  const robot = store.getSnapshot().robots.find((r) =>
+  const childBoundRobot = store.getSnapshot().robots.find((r) =>
     r.enabled
     && r.feishuMode !== 'webhook'
     && r.feishuAppId
     && r.feishuAppSecret
     && r.childIds.includes(child.id)
+  );
+  const robot = childBoundRobot ?? store.getSnapshot().robots.find((r) =>
+    r.enabled
+    && r.feishuMode !== 'webhook'
+    && r.feishuAppId
+    && r.feishuAppSecret
   );
   if (!robot) {
     return undefined;
@@ -712,6 +718,19 @@ async function ensureChildFeishuAvatarKey(child: ChildProfile): Promise<string |
   });
 
   return imageKey;
+}
+
+async function backfillMissingChildAvatarKeysOnStartup(): Promise<void> {
+  const children = store.getSnapshot().children;
+  for (const child of children) {
+    if (child.feishuAvatarKey) {
+      continue;
+    }
+    const imageKey = await ensureChildFeishuAvatarKey(child);
+    if (imageKey) {
+      console.log(`[头像同步] 已补齐孩子头像 img_key: ${child.name}`);
+    }
+  }
 }
 
 function formatDateTimeCn(iso: string): { date: string; time: string } {
@@ -1449,6 +1468,8 @@ async function initFeishuWsClient(): Promise<void> {
 
 // 服务启动后初始化飞书 WS 连接
 void initFeishuWsClient();
+// 服务启动后补齐历史孩子头像的 img_key（仅处理缺失 key 的孩子）
+void backfillMissingChildAvatarKeysOnStartup();
 
 // 启动时若有模型余额为空，立即获取一次
 if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.balance === undefined)) {
@@ -1456,7 +1477,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.30' });
+  res.json({ success: true, version: '0.3.31' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -1571,7 +1592,7 @@ app.get('/api/children', requireAuth, (req: AuthedRequest, res) => {
   res.json({ success: true, data: list });
 });
 
-app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
+app.post('/api/children', requireAuth, requireRole('admin'), async (req, res) => {
   const { name, avatar, dailyAllowance, dailyGrantHour, dailyGrantMinute } = req.body as { name?: string; avatar?: string; dailyAllowance?: number; dailyGrantHour?: number; dailyGrantMinute?: number };
   if (!name) {
     res.status(400).json({ success: false, error: '姓名必填' });
@@ -1598,12 +1619,16 @@ app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
     draft.children.push(child);
   });
 
-  res.json({ success: true, data: child });
+  await ensureChildFeishuAvatarKey(child);
+  const latestChild = findChildById(child.id) ?? child;
+  res.json({ success: true, data: latestChild });
 });
 
-app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) => {
+app.put('/api/children/:childId', requireAuth, requireRole('admin'), async (req, res) => {
   const { childId } = req.params;
   const { name, avatar, dailyGrantHour, dailyGrantMinute } = req.body as { name?: string; avatar?: string; dailyGrantHour?: number; dailyGrantMinute?: number };
+
+  let avatarChanged = false;
 
   store.update((draft) => {
     const child = draft.children.find((item) => item.id === childId);
@@ -1614,7 +1639,7 @@ app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) 
       child.name = name;
     }
     if (avatar !== undefined) {
-      const avatarChanged = child.avatar !== avatar;
+      avatarChanged = child.avatar !== avatar;
       child.avatar = avatar;
       if (avatarChanged) {
         child.feishuAvatarKey = undefined;
@@ -1629,6 +1654,13 @@ app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) 
     }
     child.updatedAt = new Date().toISOString();
   });
+
+  if (avatarChanged) {
+    const child = findChildById(childId);
+    if (child) {
+      await ensureChildFeishuAvatarKey(child);
+    }
+  }
 
   res.json({ success: true, message: '更新成功' });
 });
