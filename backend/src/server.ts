@@ -9,9 +9,11 @@ import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import { nanoid } from 'nanoid';
 
+import * as Lark from '@larksuiteoapi/node-sdk';
+
 import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js';
 import { parseBotAction } from './aiParser.js';
-import { sendFeishuCard } from './feishu.js';
+import { buildCardSchema, sendFeishuCard, FeishuCardPayload } from './feishu.js';
 import { SchedulerService } from './scheduler.js';
 import { JsonStore } from './store.js';
 import { checkAllModelBalances } from './modelBalance.js';
@@ -200,7 +202,7 @@ function resolveFeishuSendTarget(chatIdOverride?: string): FeishuSendTarget {
   };
 }
 
-async function sendRobotCard(payload: { title: string; lines: string[] }, chatIdOverride?: string): Promise<void> {
+async function sendRobotCard(payload: FeishuCardPayload, chatIdOverride?: string): Promise<void> {
   await sendFeishuCard(resolveFeishuSendTarget(chatIdOverride), payload);
 }
 
@@ -410,7 +412,13 @@ async function applyTransaction(input: {
       `**金额**：${input.amount > 0 ? '+' : ''}${amountYuan(input.amount)}`,
       `**原因**：${input.reason}`,
       `**来源**：${input.source}`
-    ]
+    ],
+    // 携带撤销按钮，用户可在 30 分钟内点击撤销此次操作
+    actions: [{
+      text: '↩ 撤销此操作',
+      type: 'danger',
+      value: { action: 'undo_transaction', transactionId: transaction.id, childId: input.childId, amount: input.amount }
+    }]
   });
 
   const updated = findChildById(input.childId);
@@ -606,8 +614,65 @@ const scheduler = new SchedulerService(
   snapshot.config.weeklyNotify.minute
 );
 
+// 飞书 WS 长连接客户端（appId/appSecret 配置后自动连接）
+let wsClientStarted = false;
+
+function initFeishuWsClient(): void {
+  const config = store.getSnapshot().config;
+  const appId = config.feishuAppId;
+  const appSecret = config.feishuAppSecret;
+
+  if (!appId || !appSecret) {
+    console.log('[飞书WS] appId 或 appSecret 未配置，跳过长连接初始化');
+    return;
+  }
+
+  if (wsClientStarted) {
+    console.log('[飞书WS] 已启动，若需更新配置请重启服务');
+    return;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventDispatcher = new Lark.EventDispatcher({}).register({
+      'im.message.receive_v1': async (data: Record<string, unknown>) => {
+        const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(data);
+        if (chatId) {
+          store.update((draft) => { draft.config.lastActiveChatId = chatId; });
+        }
+        try {
+          await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+        } catch (error) {
+          console.error('[飞书WS] 消息处理失败:', error);
+        }
+      },
+      // card.action.trigger 不在 IHandles 类型中，通过 any 扩展
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      'card.action.trigger': async (data: any) => {
+        try {
+          return await handleCardAction(data as unknown);
+        } catch (error) {
+          console.error('[飞书WS] 卡片回调处理失败:', error);
+          return { toast: { type: 'error', content: '处理失败' } };
+        }
+      }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const wsClient = new Lark.WSClient({ appId, appSecret });
+    wsClient.start({ eventDispatcher });
+    wsClientStarted = true;
+    console.log(`[飞书WS] 长连接客户端已启动，AppID: ${appId}`);
+  } catch (error) {
+    console.error('[飞书WS] 启动失败:', error);
+  }
+}
+
+// 服务启动后初始化飞书 WS 连接
+initFeishuWsClient();
+
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.7' });
+  res.json({ success: true, version: '0.2.8' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1185,57 +1250,82 @@ app.get('/api/weekly-summaries', requireAuth, (req: AuthedRequest, res) => {
   res.json({ success: true, data: list.slice(-50).reverse() });
 });
 
-app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedRequest, res) => {
-  if (!verifyFeishuToken(req.body)) {
-    res.status(401).json({ success: false, error: '飞书 token 校验失败' });
-    return;
-  }
+// 处理卡片按钮回调（card.action.trigger），返回飞书 toast 响应
+async function handleCardAction(eventData: unknown): Promise<Record<string, unknown>> {
+  const data = eventData as Record<string, unknown>;
+  const action = data.action as Record<string, unknown> | undefined;
+  const actionValue = (action?.value as Record<string, unknown> | undefined) ?? {};
+  const actionType = actionValue['action'] as string | undefined;
+  const contextObj = data.context as Record<string, unknown> | undefined;
+  const chatId = contextObj?.open_chat_id as string | undefined;
 
-  if (!verifyFeishuSignature(req)) {
-    res.status(401).json({ success: false, error: '飞书签名校验失败' });
-    return;
-  }
+  switch (actionType) {
+    case 'undo_transaction': {
+      const transactionId = actionValue['transactionId'] as string | undefined;
+      const childId = actionValue['childId'] as string | undefined;
 
-  const body = req.body as { challenge?: string; type?: string; header?: { event_type?: string } };
-  if (body?.challenge || body?.type === 'url_verification') {
-    res.json({ challenge: body.challenge ?? '' });
-    return;
-  }
+      if (!transactionId || !childId) {
+        return { toast: { type: 'error', content: '参数无效', i18n: { zh_cn: '参数无效' } } };
+      }
 
-  const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+      let found = false;
+      let reversedAmount = 0;
+      let childName = '';
 
-  if (chatId) {
-    store.update((draft) => {
-      draft.config.lastActiveChatId = chatId;
-    });
-  }
+      store.update((draft) => {
+        const idx = draft.transactions.findIndex((t) => t.id === transactionId);
+        if (idx >= 0) {
+          reversedAmount = draft.transactions[idx].amount;
+          draft.transactions.splice(idx, 1);
+          const child = draft.children.find((c) => c.id === childId);
+          if (child) {
+            child.balance -= reversedAmount;
+            child.updatedAt = new Date().toISOString();
+            childName = child.name;
+          }
+          found = true;
+        }
+      });
 
-  const eventType = body?.header?.event_type;
-  if (eventType && eventType !== 'im.message.receive_v1') {
-    res.json({ success: true, ignored: true, reason: 'unsupported_event_type' });
-    return;
-  }
+      if (!found) {
+        return { toast: { type: 'error', content: '操作已失效或已被撤销', i18n: { zh_cn: '操作已失效或已被撤销' } } };
+      }
 
-  if (senderType === 'bot') {
-    res.json({ success: true, ignored: true, reason: 'bot_sender' });
-    return;
-  }
+      try {
+        await sendRobotCard({
+          title: '操作已撤销',
+          lines: [
+            `**对象**：${childName || childId}`,
+            `**逆向金额**：${reversedAmount > 0 ? '-' : '+'}${amountYuan(Math.abs(reversedAmount))}`,
+            `**操作时间**：${new Date().toLocaleString('zh-CN')}`
+          ],
+          color: 'grey'
+        }, chatId);
+      } catch {
+        // 通知失败不阻断撤销成功
+      }
 
-  if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text')) {
-    res.json({ success: true, ignored: true, reason: 'invalid_payload' });
-    return;
+      return { toast: { type: 'success', content: '已成功撤销', i18n: { zh_cn: '已成功撤销' } } };
+    }
+    default:
+      return { toast: { type: 'info', content: '收到交互', i18n: { zh_cn: '收到交互' } } };
   }
+}
 
-  if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) {
-    res.json({ success: true, ignored: true, reason: 'ignored_sender' });
-    return;
-  }
+// 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
+async function processBotMessage(
+  senderOpenId: string | undefined,
+  senderType: string | undefined,
+  messageType: string | undefined,
+  contentRaw: string | undefined,
+  chatId: string | undefined
+): Promise<ParsedBotAction | null> {
+  if (senderType === 'bot') return null;
+  if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text')) return null;
+  if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) return null;
 
   const matchedRobots = resolveMatchedRobots(senderOpenId, chatId);
-  if (matchedRobots.length === 0) {
-    res.json({ success: true, ignored: true, reason: 'unbound_robot_or_sender' });
-    return;
-  }
+  if (matchedRobots.length === 0) return null;
 
   let text = '';
   try {
@@ -1247,34 +1337,22 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
 
   const parserModel = resolveParserModelConfig();
   const action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
-  if (action.intent === 'unknown') {
-    res.json({ success: true, ignored: true, reason: 'unrecognized' });
-    return;
-  }
+  if (action.intent === 'unknown') return null;
 
   const robot = pickRobotForAction(matchedRobots, action.childName);
-  if (!robot) {
-    res.json({ success: true, ignored: true, reason: 'robot_not_resolved' });
-    return;
-  }
+  if (!robot) return null;
 
   const targetChild = resolveChildFromAction(action, robot);
   if (!targetChild && action.intent !== 'set_weekly_notify') {
-    res.status(400).json({ success: false, error: '未找到目标小孩或无权限' });
-    return;
+    throw new Error('未找到目标小孩或无权限');
   }
 
   switch (action.intent) {
     case 'set_daily_allowance': {
-      if (!targetChild || action.amount === undefined) {
-        res.status(400).json({ success: false, error: '缺少参数' });
-        return;
-      }
+      if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
       store.update((draft) => {
         const child = draft.children.find((item) => item.id === targetChild.id);
-        if (!child) {
-          return;
-        }
+        if (!child) return;
         child.dailyAllowance = action.amount as number;
         child.updatedAt = new Date().toISOString();
       });
@@ -1289,10 +1367,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
     }
     case 'set_reward_rule': {
-      if (!targetChild || !action.rewardKeyword || action.amount === undefined) {
-        res.status(400).json({ success: false, error: '缺少参数' });
-        return;
-      }
+      if (!targetChild || !action.rewardKeyword || action.amount === undefined) throw new Error('缺少参数');
       const rule = {
         id: nanoid(),
         keyword: action.rewardKeyword,
@@ -1301,9 +1376,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       };
       store.update((draft) => {
         const child = draft.children.find((item) => item.id === targetChild.id);
-        if (!child) {
-          return;
-        }
+        if (!child) return;
         child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
         child.rewardRules.push(rule);
       });
@@ -1319,14 +1392,10 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
     }
     case 'deduct_expense': {
-      if (!targetChild || action.amount === undefined) {
-        res.status(400).json({ success: false, error: '缺少参数' });
-        return;
-      }
-      const delta = -action.amount;
+      if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
       await applyTransaction({
         childId: targetChild.id,
-        amount: delta,
+        amount: -action.amount,
         reason: action.reason ?? '消费',
         type: 'expense',
         source: 'bot',
@@ -1335,10 +1404,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
     }
     case 'set_weekly_notify': {
-      if (action.hour === undefined || action.minute === undefined) {
-        res.status(400).json({ success: false, error: '缺少时间参数' });
-        return;
-      }
+      if (action.hour === undefined || action.minute === undefined) throw new Error('缺少时间参数');
       store.update((draft) => {
         draft.config.weeklyNotify = {
           hour: action.hour as number,
@@ -1356,16 +1422,10 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
     }
     case 'reward_from_message': {
-      if (!targetChild || !action.rewardKeyword) {
-        res.status(400).json({ success: false, error: '缺少参数' });
-        return;
-      }
+      if (!targetChild || !action.rewardKeyword) throw new Error('缺少参数');
       const child = findChildById(targetChild.id);
       const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
-      if (!reward) {
-        res.json({ success: true, ignored: true, reason: 'no_reward_rule' });
-        return;
-      }
+      if (!reward) return null; // 无匹配奖励规则，忽略
       await applyTransaction({
         childId: targetChild.id,
         amount: reward.amount,
@@ -1380,7 +1440,65 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
   }
 
-  res.json({ success: true, action });
+  return action;
+}
+
+app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedRequest, res) => {
+  if (!verifyFeishuToken(req.body)) {
+    res.status(401).json({ success: false, error: '飞书 token 校验失败' });
+    return;
+  }
+
+  if (!verifyFeishuSignature(req)) {
+    res.status(401).json({ success: false, error: '飞书签名校验失败' });
+    return;
+  }
+
+  const body = req.body as { challenge?: string; type?: string; header?: { event_type?: string } };
+  if (body?.challenge || body?.type === 'url_verification') {
+    res.json({ challenge: body.challenge ?? '' });
+    return;
+  }
+
+  const eventType = body?.header?.event_type;
+
+  // 处理卡片按钮回调
+  if (eventType === 'card.action.trigger') {
+    const bodyData = req.body as Record<string, unknown>;
+    const eventData = (bodyData.event as Record<string, unknown> | undefined) ?? bodyData;
+    try {
+      const result = await handleCardAction(eventData);
+      res.json(result);
+    } catch (error) {
+      console.error('[飞书Webhook] 卡片回调处理失败:', error);
+      res.json({ toast: { type: 'error', content: '处理失败' } });
+    }
+    return;
+  }
+
+  if (eventType && eventType !== 'im.message.receive_v1') {
+    res.json({ success: true, ignored: true, reason: 'unsupported_event_type' });
+    return;
+  }
+
+  const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+
+  if (chatId) {
+    store.update((draft) => {
+      draft.config.lastActiveChatId = chatId;
+    });
+  }
+
+  try {
+    const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+    if (!action) {
+      res.json({ success: true, ignored: true });
+      return;
+    }
+    res.json({ success: true, action });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : '处理失败' });
+  }
 });
 
 app.get('/api/dashboard', requireAuth, (req: AuthedRequest, res) => {

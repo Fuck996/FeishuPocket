@@ -15,34 +15,43 @@ async function getTenantAccessToken(appId, appSecret) {
     }
     return data.tenant_access_token;
 }
-function buildCard(payload) {
+// 构建飞书卡片 JSON 2.0 schema（支持回传按钮，触发 card.action.trigger 新版回调）
+export function buildCardSchema(payload) {
+    const elements = payload.lines.map((line) => ({
+        tag: 'markdown',
+        content: line
+    }));
+    // 每个按钮独立放入 body elements，使用 request_callback 行为触发新版回调
+    if (payload.actions?.length) {
+        for (const action of payload.actions) {
+            elements.push({
+                tag: 'button',
+                text: { tag: 'plain_text', content: action.text },
+                type: action.type,
+                behaviors: [{ type: 'request_callback', value: action.value }]
+            });
+        }
+    }
     return {
-        msg_type: 'interactive',
-        card: {
-            config: {
-                wide_screen_mode: true
-            },
-            header: {
-                template: 'blue',
-                title: {
-                    tag: 'plain_text',
-                    content: payload.title
-                }
-            },
-            elements: payload.lines.map((line) => ({
-                tag: 'markdown',
-                content: line
-            }))
+        schema: '2.0',
+        config: { wide_screen_mode: true },
+        header: {
+            template: payload.color ?? 'blue',
+            title: { tag: 'plain_text', content: payload.title }
+        },
+        body: {
+            direction: 'vertical',
+            elements
         }
     };
 }
 async function sendByWebhook(webhookUrl, payload) {
+    const card = buildCardSchema(payload);
     await fetch(webhookUrl, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(buildCard(payload))
+        headers: { 'Content-Type': 'application/json' },
+        // webhook 格式：{ msg_type, card: <JSON 2.0 schema> }
+        body: JSON.stringify({ msg_type: 'interactive', card })
     });
 }
 async function sendByApp(target, payload) {
@@ -50,16 +59,18 @@ async function sendByApp(target, payload) {
         return;
     }
     const tenantAccessToken = await getTenantAccessToken(target.appId, target.appSecret);
+    const card = buildCardSchema(payload);
     const response = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${tenantAccessToken}`,
             'Content-Type': 'application/json'
         },
+        // app 发送格式：content 直接是 JSON 2.0 schema 字符串
         body: JSON.stringify({
             receive_id: target.chatId,
             msg_type: 'interactive',
-            content: JSON.stringify({ card: buildCard(payload).card })
+            content: JSON.stringify(card)
         })
     });
     if (!response.ok) {
