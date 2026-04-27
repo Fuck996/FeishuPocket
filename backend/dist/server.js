@@ -810,8 +810,14 @@ const scheduler = new SchedulerService({
 }, snapshot.config.weeklyNotify.hour, snapshot.config.weeklyNotify.minute);
 // 飞书 WS 长连接客户端（appId/appSecret 配置后自动连接）
 let wsClientStarted = false;
+let wsClientConnecting = false;
 let wsClientAppId;
-function initFeishuWsClient() {
+let wsClientLastReadyAt;
+let wsClientLastError;
+let wsClientLastReconnectingAt;
+let wsClientLastReconnectedAt;
+let wsClient;
+async function initFeishuWsClient() {
     // 仅使用启用且 app 模式的机器人建立 WS 长连接
     const robot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook' && r.feishuAppId && r.feishuAppSecret);
     const appId = robot?.feishuAppId;
@@ -819,6 +825,10 @@ function initFeishuWsClient() {
     const robotId = robot?.id;
     if (!appId || !appSecret) {
         console.log('[飞书WS] appId 或 appSecret 未配置，跳过长连接初始化');
+        return;
+    }
+    if (wsClientConnecting) {
+        console.log('[飞书WS] 正在连接中，跳过重复初始化');
         return;
     }
     if (wsClientStarted) {
@@ -862,24 +872,75 @@ function initFeishuWsClient() {
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         });
-        const wsClient = new Lark.WSClient({ appId, appSecret });
-        wsClient.start({ eventDispatcher });
-        wsClientStarted = true;
-        wsClientAppId = appId;
-        console.log(`[飞书WS] 长连接客户端已启动，AppID: ${appId}`);
+        wsClientConnecting = true;
+        wsClientLastError = undefined;
+        wsClient = new Lark.WSClient({
+            appId,
+            appSecret,
+            onReady: () => {
+                wsClientStarted = true;
+                wsClientConnecting = false;
+                wsClientAppId = appId;
+                wsClientLastReadyAt = new Date().toISOString();
+                wsClientLastError = undefined;
+                console.log(`[飞书WS] 长连接握手成功，AppID: ${appId}`);
+            },
+            onError: (err) => {
+                wsClientStarted = false;
+                wsClientConnecting = false;
+                wsClientLastError = err.message;
+                console.error('[飞书WS] 连接失败:', err);
+            },
+            onReconnecting: () => {
+                wsClientStarted = false;
+                wsClientLastReconnectingAt = new Date().toISOString();
+                console.warn('[飞书WS] 连接中断，进入重连中');
+            },
+            onReconnected: () => {
+                wsClientStarted = true;
+                wsClientLastReconnectedAt = new Date().toISOString();
+                wsClientLastError = undefined;
+                console.log('[飞书WS] 重连成功');
+            }
+        });
+        await wsClient.start({ eventDispatcher });
+        // start 结束后若仍未 ready，至少清理连接中状态，避免后续无法重试
+        if (!wsClientStarted) {
+            wsClientConnecting = false;
+            console.warn('[飞书WS] start 已返回但尚未 ready，等待 SDK 回调');
+        }
     }
     catch (error) {
+        wsClientConnecting = false;
+        wsClientStarted = false;
+        wsClientLastError = error instanceof Error ? error.message : 'WS 启动失败';
         console.error('[飞书WS] 启动失败:', error);
     }
 }
 // 服务启动后初始化飞书 WS 连接
-initFeishuWsClient();
+void initFeishuWsClient();
 // 启动时若有模型余额为空，立即获取一次
 if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.balance === undefined)) {
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.13' });
+    res.json({ success: true, version: '0.3.14' });
+});
+app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
+    const reconnectInfo = wsClient?.getReconnectInfo();
+    res.json({
+        success: true,
+        data: {
+            started: wsClientStarted,
+            connecting: wsClientConnecting,
+            appId: wsClientAppId,
+            lastReadyAt: wsClientLastReadyAt,
+            lastError: wsClientLastError,
+            lastReconnectingAt: wsClientLastReconnectingAt,
+            lastReconnectedAt: wsClientLastReconnectedAt,
+            reconnectInfo
+        }
+    });
 });
 app.get('/api/setup-status', (_req, res) => {
     const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
@@ -1137,7 +1198,7 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
         draft.robots.push(robot);
     });
     // 新增机器人后立即尝试初始化 WS，避免“启动时未配置”导致后续不接收消息
-    initFeishuWsClient();
+    void initFeishuWsClient();
     res.json({ success: true, data: robot });
 });
 app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -1191,7 +1252,7 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
         updatedRobot = robot;
     });
     // 更新机器人后立即尝试初始化 WS，确保新增凭证可在当前进程生效
-    initFeishuWsClient();
+    void initFeishuWsClient();
     res.json({ success: true, data: updatedRobot });
 });
 app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -1431,7 +1492,7 @@ app.put('/api/config/system', requireAuth, requireRole('admin'), (req, res) => {
             robot.feishuDefaultChatId = feishuDefaultChatId;
     });
     // 兼容旧端点更新飞书配置后，立即尝试初始化 WS
-    initFeishuWsClient();
+    void initFeishuWsClient();
     res.json({ success: true, message: '配置已更新到机器人' });
 });
 app.get('/api/transactions', requireAuth, (req, res) => {
