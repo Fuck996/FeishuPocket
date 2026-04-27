@@ -1,0 +1,76 @@
+﻿name: Build & Push Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 镜像标签（例如 v0.1.2）
+        required: true
+        default: latest
+      build_title:
+        description: 构建标题
+        required: false
+        default: FeishuPocket 镜像构建
+      build_description:
+        description: 构建说明
+        required: false
+        default: 手动触发构建
+      push_to_registry:
+        description: 是否推送到 GHCR
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build backend/frontend images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image metadata
+        id: vars
+        run: |
+          owner_lower=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            image_tag="${{ github.event.inputs.image_tag }}"
+          else
+            image_tag="latest"
+          fi
+          echo "owner_lower=$owner_lower" >> $GITHUB_OUTPUT
+          echo "image_tag=$image_tag" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry == 'true' }}
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry == 'true' }}
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-backend:${{ steps.vars.outputs.image_tag }}
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-backend:latest
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry == 'true' }}
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-frontend:${{ steps.vars.outputs.image_tag }}
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-frontend:latest

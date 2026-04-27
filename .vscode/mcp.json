@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "fspocketNotifier": {
+      "type": "http",
+      "url": "https://fsbot.4npc.net:2020/api/mcp/sse?token=${env:FSPOCKET_MCP_TOKEN}"
+    }
+  }
+}

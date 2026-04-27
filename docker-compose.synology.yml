@@ -1,0 +1,31 @@
+version: '3.9'
+services:
+  backend:
+    container_name: feishu-pocket-backend
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-github-username}/feishu-pocket-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      JWT_SECRET: ${JWT_SECRET:-please-change-in-production}
+      DATABASE_PATH: /app/data/store.json
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - feishu-pocket-data:/app/data
+
+  frontend:
+    container_name: feishu-pocket-frontend
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-github-username}/feishu-pocket-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${APP_PORT:-45173}:80"
+
+volumes:
+  feishu-pocket-data:
+    driver: local

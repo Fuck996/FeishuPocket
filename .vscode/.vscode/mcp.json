@@ -1,0 +1,8 @@
+﻿{
+  "servers": {
+    "DigitsKingNotifier": {
+      "type": "http",
+      "url": "https://fsbot.4npc.net:2020/api/mcp/sse?token=${env:DigitsKing_MCP_TOKEN}"
+    }
+  }
+}

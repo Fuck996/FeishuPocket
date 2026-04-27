@@ -1,0 +1,56 @@
+{
+  "users": [
+    {
+      "id": "UbfXLAVOAs4cmbZj7ErSF",
+      "username": "admin",
+      "passwordHash": "$2a$10$uhJtiyynEI6FYyLmoxfgLO5tbauAyeGP1JqzeJ5L5/GeTNl/naF4C",
+      "role": "admin",
+      "childIds": [],
+      "createdAt": "2026-04-27T02:58:00.294Z",
+      "updatedAt": "2026-04-27T02:58:00.294Z"
+    }
+  ],
+  "children": [
+    {
+      "id": "5ScUWLVEcmCnMBI6knZcB",
+      "name": "??",
+      "avatar": "",
+      "balance": 10,
+      "dailyAllowance": 10,
+      "rewardRules": [],
+      "createdAt": "2026-04-27T02:58:00.551Z",
+      "updatedAt": "2026-04-27T02:58:25.054Z"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "UpFho-DCJQcSVtJKH8Sbh",
+      "childId": "5ScUWLVEcmCnMBI6knZcB",
+      "amount": 5,
+      "reason": "??????",
+      "type": "manual",
+      "source": "admin",
+      "actorUserId": "UbfXLAVOAs4cmbZj7ErSF",
+      "createdAt": "2026-04-27T02:58:00.594Z"
+    },
+    {
+      "id": "pva5plDcCne21vSJO2H5V",
+      "childId": "5ScUWLVEcmCnMBI6knZcB",
+      "amount": 5,
+      "reason": "??????",
+      "type": "manual",
+      "source": "admin",
+      "actorUserId": "UbfXLAVOAs4cmbZj7ErSF",
+      "createdAt": "2026-04-27T02:58:25.054Z"
+    }
+  ],
+  "weeklySummaries": [],
+  "config": {
+    "weeklyNotify": {
+      "hour": 20,
+      "minute": 0
+    },
+    "ignoreBotUserIds": [],
+    "defaultDailyAllowance": 10
+  }
+}
