@@ -527,7 +527,7 @@ function resolveMatchedRobots(senderOpenId: string, chatId?: string): RobotConfi
       return false;
     }
 
-    if (!robot.controllerOpenIds.includes(senderOpenId)) {
+    if (robot.controllerOpenIds.length > 0 && !robot.controllerOpenIds.includes(senderOpenId)) {
       return false;
     }
 
@@ -769,7 +769,7 @@ function initFeishuWsClient(): void {
 initFeishuWsClient();
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.0' });
+  res.json({ success: true, version: '0.3.1' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1069,11 +1069,6 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
     return;
   }
 
-  if (normalizedControllerOpenIds.length === 0) {
-    res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
-    return;
-  }
-
   const now = new Date().toISOString();
   const robot: RobotConfig = {
     id: nanoid(),
@@ -1139,11 +1134,6 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
 
   if (normalizedChildIds !== undefined && normalizedChildIds.length === 0) {
     res.status(400).json({ success: false, error: '至少绑定一个小孩' });
-    return;
-  }
-
-  if (normalizedControllerOpenIds !== undefined && normalizedControllerOpenIds.length === 0) {
-    res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
     return;
   }
 

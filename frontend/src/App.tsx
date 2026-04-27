@@ -1133,7 +1133,6 @@ function App() {
                       <option value="weekly">周报总结</option>
                       <option value="incident">事件报告</option>
                       <option value="optimization">优化建议</option>
-                      <option value="pocket-money">零花钱识别</option>
                       <option value="custom">自定义</option>
                     </select>
                   </label>
@@ -1161,7 +1160,7 @@ function App() {
             )}
 
             <div className="stack-list">
-              {prompts.map((prompt) => (
+              {prompts.filter((p) => !(p.isBuiltIn && (p.purpose === 'pocket-money' || p.purpose === 'optimization'))).map((prompt) => (
                 <article className="list-card list-card--vertical" key={prompt.id}>
                   <div className="list-card__title-row">
                     <div>
@@ -1459,8 +1458,8 @@ function App() {
             <div className="form-row">
               <label>
                 可控制账号 OpenID
-                <textarea value={robotDraft.controllerOpenIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, controllerOpenIdsText: event.target.value }))} rows={6} required />
-                <span className="field-hint">填写可控制该机器人的飞书用户 OpenID（ou_xxx），每行一个。可在飞书 App「我的」→「关于飞书」→「开发者工具」→「个人 OpenID」中查到</span>
+                <textarea value={robotDraft.controllerOpenIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, controllerOpenIdsText: event.target.value }))} rows={6} placeholder="留空则任意用户都可控制" />
+                <span className="field-hint">每行一个飞书用户 OpenID（ou_xxx），留空则任意用户都可控制；可在飞书 App「我的」→「关于飞书」→「开发者工具」→「个人 OpenID」中查到</span>
               </label>
               <label>
                 允许触发的 Chat ID
@@ -1469,21 +1468,10 @@ function App() {
               </label>
             </div>
 
-            <div className="action-row">
-              <button type="submit">保存机器人</button>
-              {robotView.mode === 'edit' && <button type="button" className="danger-button" onClick={handleRobotDelete}>删除机器人</button>}
-            </div>
-          </form>
-        </section>
-
-        <section className="panel-card">
-          <div className="panel-card__header">
-            <div>
+            <div className="form-section-divider">
               <p className="section-eyebrow">飞书接入凭证</p>
               <h2>回调配置（仅本机器人）</h2>
             </div>
-          </div>
-          <form className="form-grid" onSubmit={handleRobotSave}>
             <label>
               飞书接入方式
               <select value={robotDraft.feishuMode} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuMode: event.target.value as 'app' | 'webhook' }))}>
@@ -1540,7 +1528,10 @@ function App() {
               </label>
             )}
 
-            <button type="submit">保存凭证配置</button>
+            <div className="action-row">
+              <button type="submit">保存机器人</button>
+              {robotView.mode === 'edit' && <button type="button" className="danger-button" onClick={handleRobotDelete}>删除机器人</button>}
+            </div>
           </form>
         </section>
       </div>

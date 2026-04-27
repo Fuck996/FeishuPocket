@@ -354,6 +354,17 @@ p {
   line-height: 1.6;
 }
 
+.form-section-divider {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 4px;
+}
+
+.form-section-divider h2 {
+  font-size: 17px;
+  margin-top: 4px;
+}
+
 .form-row {
   gap: 12px;
 }

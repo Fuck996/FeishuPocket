@@ -427,7 +427,7 @@ function resolveMatchedRobots(senderOpenId, chatId) {
         if (!robot.enabled) {
             return false;
         }
-        if (!robot.controllerOpenIds.includes(senderOpenId)) {
+        if (robot.controllerOpenIds.length > 0 && !robot.controllerOpenIds.includes(senderOpenId)) {
             return false;
         }
         if (robot.allowedChatIds.length === 0) {
@@ -878,10 +878,6 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
         res.status(400).json({ success: false, error: '至少绑定一个小孩' });
         return;
     }
-    if (normalizedControllerOpenIds.length === 0) {
-        res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
-        return;
-    }
     const now = new Date().toISOString();
     const robot = {
         id: nanoid(),
@@ -923,10 +919,6 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
     }
     if (normalizedChildIds !== undefined && normalizedChildIds.length === 0) {
         res.status(400).json({ success: false, error: '至少绑定一个小孩' });
-        return;
-    }
-    if (normalizedControllerOpenIds !== undefined && normalizedControllerOpenIds.length === 0) {
-        res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
         return;
     }
     let updatedRobot;
