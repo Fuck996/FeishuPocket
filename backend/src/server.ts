@@ -27,6 +27,13 @@ const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
 const feishuUserNameCache = new Map<string, { name: string; expireAt: number }>();
 const FEISHU_USER_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
+type FeishuUserIdentity = {
+  openId?: string;
+  userId?: string;
+  unionId?: string;
+  displayNameHint?: string;
+};
+
 function pushBotLog(entry: BotLogEntry): void {
   const list = botLogs.get(entry.robotId) ?? [];
   list.push(entry);
@@ -59,31 +66,52 @@ function markInboundMessageProcessed(messageId?: string): void {
   inboundMessageDedup.set(messageId, Date.now() + INBOUND_MESSAGE_DEDUP_TTL_MS);
 }
 
-function getCachedFeishuUserName(openId: string): string | undefined {
-  const cached = feishuUserNameCache.get(openId);
+function buildFeishuUserCacheKey(idType: 'open_id' | 'user_id' | 'union_id', id: string): string {
+  return `${idType}:${id}`;
+}
+
+function getCachedFeishuUserName(idType: 'open_id' | 'user_id' | 'union_id', id: string): string | undefined {
+  const cached = feishuUserNameCache.get(buildFeishuUserCacheKey(idType, id));
   if (!cached) {
     return undefined;
   }
   if (cached.expireAt <= Date.now()) {
-    feishuUserNameCache.delete(openId);
+    feishuUserNameCache.delete(buildFeishuUserCacheKey(idType, id));
     return undefined;
   }
   return cached.name;
 }
 
-function setCachedFeishuUserName(openId: string, name: string): void {
-  feishuUserNameCache.set(openId, {
-    name,
-    expireAt: Date.now() + FEISHU_USER_NAME_CACHE_TTL_MS
-  });
+function setCachedFeishuUserName(identity: FeishuUserIdentity, name: string): void {
+  const expireAt = Date.now() + FEISHU_USER_NAME_CACHE_TTL_MS;
+  if (identity.openId) {
+    feishuUserNameCache.set(buildFeishuUserCacheKey('open_id', identity.openId), { name, expireAt });
+  }
+  if (identity.userId) {
+    feishuUserNameCache.set(buildFeishuUserCacheKey('user_id', identity.userId), { name, expireAt });
+  }
+  if (identity.unionId) {
+    feishuUserNameCache.set(buildFeishuUserCacheKey('union_id', identity.unionId), { name, expireAt });
+  }
 }
 
-async function queryFeishuUserNameByOpenId(robot: RobotConfig, openId: string): Promise<string | undefined> {
-  const cached = getCachedFeishuUserName(openId);
-  if (cached) {
-    return cached;
+function getCachedFeishuUserNameByIdentity(identity: FeishuUserIdentity): string | undefined {
+  if (identity.openId) {
+    const cached = getCachedFeishuUserName('open_id', identity.openId);
+    if (cached) return cached;
   }
+  if (identity.userId) {
+    const cached = getCachedFeishuUserName('user_id', identity.userId);
+    if (cached) return cached;
+  }
+  if (identity.unionId) {
+    const cached = getCachedFeishuUserName('union_id', identity.unionId);
+    if (cached) return cached;
+  }
+  return undefined;
+}
 
+async function getFeishuTenantAccessToken(robot: RobotConfig): Promise<string | undefined> {
   if (!robot.feishuAppId || !robot.feishuAppSecret) {
     return undefined;
   }
@@ -101,33 +129,76 @@ async function queryFeishuUserNameByOpenId(robot: RobotConfig, openId: string): 
     if (tokenData.code !== 0 || !tokenData.tenant_access_token) {
       return undefined;
     }
-
-    const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, {
-      headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
-    });
-    if (!userResp.ok) {
-      return undefined;
-    }
-    const userData = await userResp.json() as {
-      code?: number;
-      data?: { user?: { name?: string; en_name?: string; nickname?: string } };
-    };
-    if (userData.code !== 0) {
-      return undefined;
-    }
-
-    const name = userData.data?.user?.name?.trim()
-      || userData.data?.user?.nickname?.trim()
-      || userData.data?.user?.en_name?.trim();
-    if (!name) {
-      return undefined;
-    }
-
-    setCachedFeishuUserName(openId, name);
-    return name;
+    return tokenData.tenant_access_token;
   } catch {
     return undefined;
   }
+}
+
+async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdentity): Promise<string | undefined> {
+  if (identity.displayNameHint?.trim()) {
+    setCachedFeishuUserName(identity, identity.displayNameHint.trim());
+    return identity.displayNameHint.trim();
+  }
+
+  const cached = getCachedFeishuUserNameByIdentity(identity);
+  if (cached) {
+    return cached;
+  }
+
+  const tenantAccessToken = await getFeishuTenantAccessToken(robot);
+  if (!tenantAccessToken) {
+    return undefined;
+  }
+
+  const candidates: Array<{ idType: 'open_id' | 'user_id' | 'union_id'; id?: string }> = [
+    { idType: 'open_id', id: identity.openId },
+    { idType: 'user_id', id: identity.userId },
+    { idType: 'union_id', id: identity.unionId }
+  ];
+
+  try {
+    for (const candidate of candidates) {
+      if (!candidate.id) {
+        continue;
+      }
+      const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(candidate.id)}?user_id_type=${candidate.idType}&department_id_type=open_department_id`, {
+        headers: {
+          Authorization: `Bearer ${tenantAccessToken}`,
+          'Content-Type': 'application/json; charset=utf-8'
+        }
+      });
+      if (!userResp.ok) {
+        continue;
+      }
+      const userData = await userResp.json() as {
+        code?: number;
+        data?: { user?: { name?: string; en_name?: string; nickname?: string; open_id?: string; user_id?: string; union_id?: string } };
+      };
+      if (userData.code !== 0) {
+        continue;
+      }
+
+      const name = userData.data?.user?.name?.trim()
+        || userData.data?.user?.nickname?.trim()
+        || userData.data?.user?.en_name?.trim();
+      if (!name) {
+        continue;
+      }
+
+      setCachedFeishuUserName({
+        openId: identity.openId ?? userData.data?.user?.open_id,
+        userId: identity.userId ?? userData.data?.user?.user_id,
+        unionId: identity.unionId ?? userData.data?.user?.union_id,
+        displayNameHint: name
+      }, name);
+      return name;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }
 
 type AuthedRequest = Request & {
@@ -266,6 +337,9 @@ function verifyFeishuSignature(req: AuthedRequest): boolean {
 
 function extractFeishuEvent(reqBody: unknown): {
   senderOpenId?: string;
+  senderUserId?: string;
+  senderUnionId?: string;
+  senderDisplayNameHint?: string;
   senderType?: string;
   messageType?: string;
   contentRaw?: string;
@@ -277,12 +351,36 @@ function extractFeishuEvent(reqBody: unknown): {
   const sender = (event.sender as Record<string, unknown> | undefined) ?? {};
   const senderId = (sender.sender_id as Record<string, unknown> | undefined) ?? {};
   const message = (event.message as Record<string, unknown> | undefined) ?? (body.message as Record<string, unknown> | undefined) ?? {};
+  const operator = (event.operator as Record<string, unknown> | undefined) ?? {};
+  const operatorId = (operator.operator_id as Record<string, unknown> | undefined) ?? {};
+  const mentions = Array.isArray(message.mentions) ? message.mentions as Array<Record<string, unknown>> : [];
 
   const senderOpenId =
     (senderId.open_id as string | undefined) ??
     (sender.open_id as string | undefined) ??
-    ((event.operator as Record<string, unknown> | undefined)?.open_id as string | undefined) ??
+    (operatorId.open_id as string | undefined) ??
+    (operator.open_id as string | undefined) ??
     (body.open_id as string | undefined);
+  const senderUserId =
+    (senderId.user_id as string | undefined) ??
+    (sender.user_id as string | undefined) ??
+    (operatorId.user_id as string | undefined) ??
+    (operator.user_id as string | undefined);
+  const senderUnionId =
+    (senderId.union_id as string | undefined) ??
+    (sender.union_id as string | undefined) ??
+    (operatorId.union_id as string | undefined) ??
+    (operator.union_id as string | undefined);
+
+  const senderDisplayNameHint =
+    (sender.name as string | undefined) ??
+    (operator.name as string | undefined) ??
+    mentions.find((mention) => {
+      const mentionId = (mention.id as Record<string, unknown> | undefined) ?? {};
+      return (senderOpenId && mentionId.open_id === senderOpenId)
+        || (senderUserId && mentionId.user_id === senderUserId)
+        || (senderUnionId && mentionId.union_id === senderUnionId);
+    })?.name as string | undefined;
 
   const senderType = (sender.sender_type as string | undefined) ?? (sender.type as string | undefined);
   const messageType = (message.message_type as string | undefined) ?? (message.type as string | undefined);
@@ -301,6 +399,9 @@ function extractFeishuEvent(reqBody: unknown): {
 
   return {
     senderOpenId,
+    senderUserId,
+    senderUnionId,
+    senderDisplayNameHint,
     senderType,
     messageType,
     contentRaw,
@@ -517,7 +618,9 @@ function resolveActorDisplay(source: MoneyTransaction['source'], actorUserId?: s
   }
 
   if (source === 'bot') {
-    const cached = getCachedFeishuUserName(actorUserId);
+    const cached = getCachedFeishuUserName('open_id', actorUserId)
+      ?? getCachedFeishuUserName('user_id', actorUserId)
+      ?? getCachedFeishuUserName('union_id', actorUserId);
     if (cached) {
       return cached;
     }
@@ -1134,7 +1237,7 @@ async function initFeishuWsClient(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const eventDispatcher = new Lark.EventDispatcher({}).register({
       'im.message.receive_v1': async (data: Record<string, unknown>) => {
-        const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
+        const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
         if (chatId && robotId) {
           store.update((draft) => {
             const r = draft.robots.find((item) => item.id === robotId);
@@ -1142,7 +1245,7 @@ async function initFeishuWsClient(): Promise<void> {
           });
         }
         try {
-          await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
+          await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
         } catch (error) {
           console.error('[飞书WS] 消息处理失败:', error);
         }
@@ -1215,7 +1318,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.25' });
+  res.json({ success: true, version: '0.3.26' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -1997,6 +2100,9 @@ async function handleCardAction(eventData: unknown): Promise<Record<string, unkn
 // 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
 async function processBotMessage(
   senderOpenId: string | undefined,
+  senderUserId: string | undefined,
+  senderUnionId: string | undefined,
+  senderDisplayNameHint: string | undefined,
   senderType: string | undefined,
   messageType: string | undefined,
   contentRaw: string | undefined,
@@ -2169,9 +2275,12 @@ async function processBotMessage(
   const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
   if (!robot) return null;
 
-  const senderDisplayName = senderOpenId
-    ? await queryFeishuUserNameByOpenId(robot, senderOpenId)
-    : undefined;
+  const senderDisplayName = await queryFeishuUserName(robot, {
+    openId: senderOpenId,
+    userId: senderUserId,
+    unionId: senderUnionId,
+    displayNameHint: senderDisplayNameHint
+  });
 
   const targetChild = resolveChildFromAction(action, robot);
   if (!targetChild && action.intent !== 'set_weekly_notify') {
@@ -2452,7 +2561,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
     return;
   }
 
-  const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
+  const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
 
   if (chatId) {
     // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
@@ -2466,7 +2575,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
   }
 
   try {
-    const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
+    const action = await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
     if (!action) {
       res.json({ success: true, ignored: true });
       return;

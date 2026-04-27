@@ -49,28 +49,51 @@ function markInboundMessageProcessed(messageId) {
     }
     inboundMessageDedup.set(messageId, Date.now() + INBOUND_MESSAGE_DEDUP_TTL_MS);
 }
-function getCachedFeishuUserName(openId) {
-    const cached = feishuUserNameCache.get(openId);
+function buildFeishuUserCacheKey(idType, id) {
+    return `${idType}:${id}`;
+}
+function getCachedFeishuUserName(idType, id) {
+    const cached = feishuUserNameCache.get(buildFeishuUserCacheKey(idType, id));
     if (!cached) {
         return undefined;
     }
     if (cached.expireAt <= Date.now()) {
-        feishuUserNameCache.delete(openId);
+        feishuUserNameCache.delete(buildFeishuUserCacheKey(idType, id));
         return undefined;
     }
     return cached.name;
 }
-function setCachedFeishuUserName(openId, name) {
-    feishuUserNameCache.set(openId, {
-        name,
-        expireAt: Date.now() + FEISHU_USER_NAME_CACHE_TTL_MS
-    });
-}
-async function queryFeishuUserNameByOpenId(robot, openId) {
-    const cached = getCachedFeishuUserName(openId);
-    if (cached) {
-        return cached;
+function setCachedFeishuUserName(identity, name) {
+    const expireAt = Date.now() + FEISHU_USER_NAME_CACHE_TTL_MS;
+    if (identity.openId) {
+        feishuUserNameCache.set(buildFeishuUserCacheKey('open_id', identity.openId), { name, expireAt });
     }
+    if (identity.userId) {
+        feishuUserNameCache.set(buildFeishuUserCacheKey('user_id', identity.userId), { name, expireAt });
+    }
+    if (identity.unionId) {
+        feishuUserNameCache.set(buildFeishuUserCacheKey('union_id', identity.unionId), { name, expireAt });
+    }
+}
+function getCachedFeishuUserNameByIdentity(identity) {
+    if (identity.openId) {
+        const cached = getCachedFeishuUserName('open_id', identity.openId);
+        if (cached)
+            return cached;
+    }
+    if (identity.userId) {
+        const cached = getCachedFeishuUserName('user_id', identity.userId);
+        if (cached)
+            return cached;
+    }
+    if (identity.unionId) {
+        const cached = getCachedFeishuUserName('union_id', identity.unionId);
+        if (cached)
+            return cached;
+    }
+    return undefined;
+}
+async function getFeishuTenantAccessToken(robot) {
     if (!robot.feishuAppId || !robot.feishuAppSecret) {
         return undefined;
     }
@@ -87,28 +110,67 @@ async function queryFeishuUserNameByOpenId(robot, openId) {
         if (tokenData.code !== 0 || !tokenData.tenant_access_token) {
             return undefined;
         }
-        const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, {
-            headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
-        });
-        if (!userResp.ok) {
-            return undefined;
-        }
-        const userData = await userResp.json();
-        if (userData.code !== 0) {
-            return undefined;
-        }
-        const name = userData.data?.user?.name?.trim()
-            || userData.data?.user?.nickname?.trim()
-            || userData.data?.user?.en_name?.trim();
-        if (!name) {
-            return undefined;
-        }
-        setCachedFeishuUserName(openId, name);
-        return name;
+        return tokenData.tenant_access_token;
     }
     catch {
         return undefined;
     }
+}
+async function queryFeishuUserName(robot, identity) {
+    if (identity.displayNameHint?.trim()) {
+        setCachedFeishuUserName(identity, identity.displayNameHint.trim());
+        return identity.displayNameHint.trim();
+    }
+    const cached = getCachedFeishuUserNameByIdentity(identity);
+    if (cached) {
+        return cached;
+    }
+    const tenantAccessToken = await getFeishuTenantAccessToken(robot);
+    if (!tenantAccessToken) {
+        return undefined;
+    }
+    const candidates = [
+        { idType: 'open_id', id: identity.openId },
+        { idType: 'user_id', id: identity.userId },
+        { idType: 'union_id', id: identity.unionId }
+    ];
+    try {
+        for (const candidate of candidates) {
+            if (!candidate.id) {
+                continue;
+            }
+            const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(candidate.id)}?user_id_type=${candidate.idType}&department_id_type=open_department_id`, {
+                headers: {
+                    Authorization: `Bearer ${tenantAccessToken}`,
+                    'Content-Type': 'application/json; charset=utf-8'
+                }
+            });
+            if (!userResp.ok) {
+                continue;
+            }
+            const userData = await userResp.json();
+            if (userData.code !== 0) {
+                continue;
+            }
+            const name = userData.data?.user?.name?.trim()
+                || userData.data?.user?.nickname?.trim()
+                || userData.data?.user?.en_name?.trim();
+            if (!name) {
+                continue;
+            }
+            setCachedFeishuUserName({
+                openId: identity.openId ?? userData.data?.user?.open_id,
+                userId: identity.userId ?? userData.data?.user?.user_id,
+                unionId: identity.unionId ?? userData.data?.user?.union_id,
+                displayNameHint: name
+            }, name);
+            return name;
+        }
+    }
+    catch {
+        return undefined;
+    }
+    return undefined;
 }
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -222,10 +284,30 @@ function extractFeishuEvent(reqBody) {
     const sender = event.sender ?? {};
     const senderId = sender.sender_id ?? {};
     const message = event.message ?? body.message ?? {};
+    const operator = event.operator ?? {};
+    const operatorId = operator.operator_id ?? {};
+    const mentions = Array.isArray(message.mentions) ? message.mentions : [];
     const senderOpenId = senderId.open_id ??
         sender.open_id ??
-        event.operator?.open_id ??
+        operatorId.open_id ??
+        operator.open_id ??
         body.open_id;
+    const senderUserId = senderId.user_id ??
+        sender.user_id ??
+        operatorId.user_id ??
+        operator.user_id;
+    const senderUnionId = senderId.union_id ??
+        sender.union_id ??
+        operatorId.union_id ??
+        operator.union_id;
+    const senderDisplayNameHint = sender.name ??
+        operator.name ??
+        mentions.find((mention) => {
+            const mentionId = mention.id ?? {};
+            return (senderOpenId && mentionId.open_id === senderOpenId)
+                || (senderUserId && mentionId.user_id === senderUserId)
+                || (senderUnionId && mentionId.union_id === senderUnionId);
+        })?.name;
     const senderType = sender.sender_type ?? sender.type;
     const messageType = message.message_type ?? message.type;
     const chatId = message.chat_id ?? event.chat?.chat_id;
@@ -243,6 +325,9 @@ function extractFeishuEvent(reqBody) {
     }
     return {
         senderOpenId,
+        senderUserId,
+        senderUnionId,
+        senderDisplayNameHint,
         senderType,
         messageType,
         contentRaw,
@@ -431,7 +516,9 @@ function resolveActorDisplay(source, actorUserId, actorDisplayName) {
         return actorDisplayName;
     }
     if (source === 'bot') {
-        const cached = getCachedFeishuUserName(actorUserId);
+        const cached = getCachedFeishuUserName('open_id', actorUserId)
+            ?? getCachedFeishuUserName('user_id', actorUserId)
+            ?? getCachedFeishuUserName('union_id', actorUserId);
         if (cached) {
             return cached;
         }
@@ -952,7 +1039,7 @@ async function initFeishuWsClient() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const eventDispatcher = new Lark.EventDispatcher({}).register({
             'im.message.receive_v1': async (data) => {
-                const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
+                const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
                 if (chatId && robotId) {
                     store.update((draft) => {
                         const r = draft.robots.find((item) => item.id === robotId);
@@ -961,7 +1048,7 @@ async function initFeishuWsClient() {
                     });
                 }
                 try {
-                    await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
+                    await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
                 }
                 catch (error) {
                     console.error('[飞书WS] 消息处理失败:', error);
@@ -1032,7 +1119,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.25' });
+    res.json({ success: true, version: '0.3.26' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1675,7 +1762,7 @@ async function handleCardAction(eventData) {
     }
 }
 // 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
-async function processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId) {
+async function processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId) {
     const diagnosticRobot = resolveDiagnosticRobot(chatId);
     const previewText = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
     const logIgnoredInbound = (reason) => {
@@ -1833,9 +1920,12 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
     const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
-    const senderDisplayName = senderOpenId
-        ? await queryFeishuUserNameByOpenId(robot, senderOpenId)
-        : undefined;
+    const senderDisplayName = await queryFeishuUserName(robot, {
+        openId: senderOpenId,
+        userId: senderUserId,
+        unionId: senderUnionId,
+        displayNameHint: senderDisplayNameHint
+    });
     const targetChild = resolveChildFromAction(action, robot);
     if (!targetChild && action.intent !== 'set_weekly_notify') {
         throw new Error('未找到目标小孩或无权限');
@@ -2119,7 +2209,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
         res.json({ success: true, ignored: true, reason: 'unsupported_event_type' });
         return;
     }
-    const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
+    const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
     if (chatId) {
         // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
         const matchedRobot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook');
@@ -2132,7 +2222,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
         }
     }
     try {
-        const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
+        const action = await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
         if (!action) {
             res.json({ success: true, ignored: true });
             return;
