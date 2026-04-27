@@ -630,6 +630,7 @@ async function applyTransaction(input: {
   type: MoneyTransaction['type'];
   source: MoneyTransaction['source'];
   actorUserId?: string;
+  chatIdOverride?: string;
 }): Promise<{ child: ChildProfile; transaction: MoneyTransaction }> {
   const snapshot = store.getSnapshot();
   const child = snapshot.children.find((item) => item.id === input.childId);
@@ -702,7 +703,7 @@ async function applyTransaction(input: {
     ?? store.getSnapshot().robots[0];
 
   try {
-    const messageId = await sendRobotCard(payload, undefined, input.childId);
+    const messageId = await sendRobotCard(payload, input.chatIdOverride, input.childId);
     if (logRobot) {
       pushBotLog({
         id: nanoid(),
@@ -1122,7 +1123,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.15' });
+  res.json({ success: true, version: '0.3.16' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2128,7 +2129,8 @@ async function processBotMessage(
           reason: action.reason ?? '消费',
           type: 'expense',
           source: 'bot',
-          actorUserId: senderOpenId
+          actorUserId: senderOpenId,
+          chatIdOverride: chatId
         });
         break;
       }
@@ -2162,7 +2164,8 @@ async function processBotMessage(
           reason: action.reason ?? `完成${reward.keyword}`,
           type: 'reward',
           source: 'bot',
-          actorUserId: senderOpenId
+          actorUserId: senderOpenId,
+          chatIdOverride: chatId
         });
         break;
       }
@@ -2174,7 +2177,8 @@ async function processBotMessage(
           reason: '手动发放零花钱',
           type: 'daily',
           source: 'bot',
-          actorUserId: senderOpenId
+          actorUserId: senderOpenId,
+          chatIdOverride: chatId
         });
 
         const today = new Date().toISOString().slice(0, 10);
@@ -2194,7 +2198,8 @@ async function processBotMessage(
           reason: '手动余额增加',
           type: 'manual',
           source: 'bot',
-          actorUserId: senderOpenId
+          actorUserId: senderOpenId,
+          chatIdOverride: chatId
         });
         break;
       }
@@ -2206,7 +2211,8 @@ async function processBotMessage(
           reason: '手动余额减少',
           type: 'manual',
           source: 'bot',
-          actorUserId: senderOpenId
+          actorUserId: senderOpenId,
+          chatIdOverride: chatId
         });
         break;
       }
@@ -2267,12 +2273,15 @@ async function processBotMessage(
       inLog.error = errMsg;
     }
     try {
+      const suggestion = errMsg.includes('飞书应用消息发送失败') || errMsg.includes('access_token')
+        ? '指令已识别，但结果回传失败；请检查机器人会话 Chat ID、应用消息权限和群可见范围'
+        : '请检查金额格式或当前机器人权限配置';
       const msgId = await sendRobotCard({
         title: '⚠️ 指令处理失败',
         lines: [
           `**原始消息**：${text}`,
           `**失败原因**：${errMsg}`,
-          `**建议**：请检查孩子名称、金额格式或当前机器人权限配置`
+          `**建议**：${suggestion}`
         ],
         color: 'red'
       }, chatId);

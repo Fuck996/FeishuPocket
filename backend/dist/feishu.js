@@ -82,7 +82,15 @@ async function sendByApp(target, payload) {
         })
     });
     if (!response.ok) {
-        throw new Error(`飞书应用消息发送失败 (${response.status})`);
+        let detail = '';
+        try {
+            const errData = await response.json();
+            detail = `, code=${errData.code ?? 'unknown'}, msg=${errData.msg ?? 'unknown'}`;
+        }
+        catch {
+            detail = '';
+        }
+        throw new Error(`飞书应用消息发送失败 (${response.status}${detail})`);
     }
     const data = await response.json();
     return data.data?.message_id;
