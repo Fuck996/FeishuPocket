@@ -15,7 +15,7 @@ import { sendFeishuCard } from './feishu.js';
 import { SchedulerService } from './scheduler.js';
 import { JsonStore } from './store.js';
 import { checkAllModelBalances } from './modelBalance.js';
-import { ChildProfile, MoneyTransaction, ParsedBotAction, UserAccount, UserRole, WeeklySummary, ModelConfig, ModelProvider, PromptTemplate } from './types.js';
+import { ChildProfile, MoneyTransaction, ParsedBotAction, UserAccount, UserRole, WeeklySummary, ModelConfig, ModelProvider, PromptTemplate, RobotConfig } from './types.js';
 
 type AuthedRequest = Request & {
   authUser?: UserAccount;
@@ -420,31 +420,75 @@ async function applyTransaction(input: {
   return { child: updated, transaction };
 }
 
-function getDefaultChildForUser(user: UserAccount): ChildProfile | undefined {
+function getDefaultChildForRobot(robot: RobotConfig): ChildProfile | undefined {
   const snapshot = store.getSnapshot();
-  if (user.role === 'admin') {
-    return snapshot.children[0];
-  }
-  const firstId = user.childIds[0];
+  const firstId = robot.childIds[0];
   if (!firstId) {
     return undefined;
   }
   return snapshot.children.find((item) => item.id === firstId);
 }
 
-function resolveChildFromAction(action: ParsedBotAction, user: UserAccount): ChildProfile | undefined {
+function canRobotManageChild(robot: RobotConfig, childId: string): boolean {
+  return robot.childIds.includes(childId);
+}
+
+function resolveChildFromAction(action: ParsedBotAction, robot: RobotConfig): ChildProfile | undefined {
   const snapshot = store.getSnapshot();
   if (action.childName) {
     const found = snapshot.children.find((item) => item.name === action.childName);
     if (!found) {
       return undefined;
     }
-    if (!canManageChild(user, found.id)) {
+    if (!canRobotManageChild(robot, found.id)) {
       return undefined;
     }
     return found;
   }
-  return getDefaultChildForUser(user);
+  return getDefaultChildForRobot(robot);
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean)));
+}
+
+function resolveMatchedRobots(senderOpenId: string, chatId?: string): RobotConfig[] {
+  return store.getSnapshot().robots.filter((robot) => {
+    if (!robot.enabled) {
+      return false;
+    }
+
+    if (!robot.controllerOpenIds.includes(senderOpenId)) {
+      return false;
+    }
+
+    if (robot.allowedChatIds.length === 0) {
+      return true;
+    }
+
+    return !!chatId && robot.allowedChatIds.includes(chatId);
+  });
+}
+
+function pickRobotForAction(robots: RobotConfig[], childName?: string): RobotConfig | undefined {
+  if (robots.length <= 1) {
+    return robots[0];
+  }
+
+  if (!childName) {
+    return robots[0];
+  }
+
+  const child = store.getSnapshot().children.find((item) => item.name === childName);
+  if (!child) {
+    return robots[0];
+  }
+
+  return robots.find((robot) => robot.childIds.includes(child.id)) ?? robots[0];
 }
 
 async function runDailyGrant(): Promise<void> {
@@ -563,7 +607,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.1' });
+  res.json({ success: true, version: '0.2.2' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -816,6 +860,142 @@ app.delete('/api/operators/:userId', requireAuth, requireRole('admin'), (req, re
   res.json({ success: true, message: '删除成功' });
 });
 
+app.get('/api/robots', requireAuth, requireRole('admin'), (_req, res) => {
+  res.json({ success: true, data: store.getSnapshot().robots });
+});
+
+app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
+  const { name, enabled, childIds, controllerOpenIds, allowedChatIds } = req.body as {
+    name?: string;
+    enabled?: boolean;
+    childIds?: unknown;
+    controllerOpenIds?: unknown;
+    allowedChatIds?: unknown;
+  };
+
+  const normalizedName = String(name ?? '').trim();
+  const normalizedChildIds = normalizeStringArray(childIds);
+  const normalizedControllerOpenIds = normalizeStringArray(controllerOpenIds);
+  const normalizedAllowedChatIds = normalizeStringArray(allowedChatIds);
+
+  if (!normalizedName) {
+    res.status(400).json({ success: false, error: '机器人名称必填' });
+    return;
+  }
+
+  if (normalizedChildIds.length === 0) {
+    res.status(400).json({ success: false, error: '至少绑定一个小孩' });
+    return;
+  }
+
+  if (normalizedControllerOpenIds.length === 0) {
+    res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const robot: RobotConfig = {
+    id: nanoid(),
+    name: normalizedName,
+    enabled: enabled !== false,
+    childIds: normalizedChildIds,
+    controllerOpenIds: normalizedControllerOpenIds,
+    allowedChatIds: normalizedAllowedChatIds,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  store.update((draft) => {
+    draft.robots.push(robot);
+  });
+
+  res.json({ success: true, data: robot });
+});
+
+app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
+  const { robotId } = req.params;
+  const { name, enabled, childIds, controllerOpenIds, allowedChatIds } = req.body as {
+    name?: string;
+    enabled?: boolean;
+    childIds?: unknown;
+    controllerOpenIds?: unknown;
+    allowedChatIds?: unknown;
+  };
+
+  const exists = store.getSnapshot().robots.some((item) => item.id === robotId);
+  if (!exists) {
+    res.status(404).json({ success: false, error: '机器人不存在' });
+    return;
+  }
+
+  const normalizedName = name === undefined ? undefined : String(name).trim();
+  const normalizedChildIds = childIds === undefined ? undefined : normalizeStringArray(childIds);
+  const normalizedControllerOpenIds = controllerOpenIds === undefined ? undefined : normalizeStringArray(controllerOpenIds);
+  const normalizedAllowedChatIds = allowedChatIds === undefined ? undefined : normalizeStringArray(allowedChatIds);
+
+  if (normalizedName !== undefined && !normalizedName) {
+    res.status(400).json({ success: false, error: '机器人名称不能为空' });
+    return;
+  }
+
+  if (normalizedChildIds !== undefined && normalizedChildIds.length === 0) {
+    res.status(400).json({ success: false, error: '至少绑定一个小孩' });
+    return;
+  }
+
+  if (normalizedControllerOpenIds !== undefined && normalizedControllerOpenIds.length === 0) {
+    res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
+    return;
+  }
+
+  let updatedRobot: RobotConfig | undefined;
+  store.update((draft) => {
+    const robot = draft.robots.find((item) => item.id === robotId);
+    if (!robot) {
+      return;
+    }
+
+    if (normalizedName !== undefined) {
+      robot.name = normalizedName;
+    }
+    if (enabled !== undefined) {
+      robot.enabled = enabled;
+    }
+    if (normalizedChildIds !== undefined) {
+      robot.childIds = normalizedChildIds;
+    }
+    if (normalizedControllerOpenIds !== undefined) {
+      robot.controllerOpenIds = normalizedControllerOpenIds;
+    }
+    if (normalizedAllowedChatIds !== undefined) {
+      robot.allowedChatIds = normalizedAllowedChatIds;
+    }
+
+    robot.updatedAt = new Date().toISOString();
+    updatedRobot = robot;
+  });
+
+  res.json({ success: true, data: updatedRobot });
+});
+
+app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
+  const { robotId } = req.params;
+  let removed = false;
+
+  store.update((draft) => {
+    const before = draft.robots.length;
+    draft.robots = draft.robots.filter((item) => item.id !== robotId);
+    removed = before !== draft.robots.length;
+  });
+
+  if (!removed) {
+    res.status(404).json({ success: false, error: '机器人不存在' });
+    return;
+  }
+
+  res.json({ success: true, message: '机器人已删除' });
+});
+
 app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async (req, res) => {
   const { childId, amount } = req.body as { childId?: string; amount?: number };
   if (!childId || amount === undefined || amount < 0) {
@@ -1028,9 +1208,9 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
     return;
   }
 
-  const user = store.getSnapshot().users.find((item) => item.boundFeishuUserId === senderOpenId);
-  if (!user) {
-    res.json({ success: true, ignored: true, reason: 'unbound_sender' });
+  const matchedRobots = resolveMatchedRobots(senderOpenId, chatId);
+  if (matchedRobots.length === 0) {
+    res.json({ success: true, ignored: true, reason: 'unbound_robot_or_sender' });
     return;
   }
 
@@ -1049,7 +1229,13 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
     return;
   }
 
-  const targetChild = resolveChildFromAction(action, user);
+  const robot = pickRobotForAction(matchedRobots, action.childName);
+  if (!robot) {
+    res.json({ success: true, ignored: true, reason: 'robot_not_resolved' });
+    return;
+  }
+
+  const targetChild = resolveChildFromAction(action, robot);
   if (!targetChild && action.intent !== 'set_weekly_notify') {
     res.status(400).json({ success: false, error: '未找到目标小孩或无权限' });
     return;
@@ -1057,10 +1243,6 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
 
   switch (action.intent) {
     case 'set_daily_allowance': {
-      if (user.role !== 'admin') {
-        res.status(403).json({ success: false, error: '仅管理员可调整每日额度' });
-        return;
-      }
       if (!targetChild || action.amount === undefined) {
         res.status(400).json({ success: false, error: '缺少参数' });
         return;
@@ -1084,10 +1266,6 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
       break;
     }
     case 'set_reward_rule': {
-      if (user.role !== 'admin') {
-        res.status(403).json({ success: false, error: '仅管理员可设置奖励项目' });
-        return;
-      }
       if (!targetChild || !action.rewardKeyword || action.amount === undefined) {
         res.status(400).json({ success: false, error: '缺少参数' });
         return;
@@ -1129,15 +1307,11 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
         reason: action.reason ?? '消费',
         type: 'expense',
         source: 'bot',
-        actorUserId: user.id
+        actorUserId: undefined
       });
       break;
     }
     case 'set_weekly_notify': {
-      if (user.role !== 'admin') {
-        res.status(403).json({ success: false, error: '仅管理员可设置周报时间' });
-        return;
-      }
       if (action.hour === undefined || action.minute === undefined) {
         res.status(400).json({ success: false, error: '缺少时间参数' });
         return;
@@ -1175,7 +1349,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
         reason: action.reason ?? `完成${reward.keyword}`,
         type: 'reward',
         source: 'bot',
-        actorUserId: user.id
+        actorUserId: undefined
       });
       break;
     }
@@ -1377,6 +1551,19 @@ app.delete('/api/prompts/:id', requireAuth, requireRole('admin'), (req: AuthedRe
   } else {
     res.status(404).json({ success: false, error: '提示词模板不存在' });
   }
+});
+
+app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
+  if (!req.path.startsWith('/api/')) {
+    next(error);
+    return;
+  }
+
+  console.error('[API ERROR]', error);
+  res.status(500).json({
+    success: false,
+    error: error instanceof Error ? error.message : '服务器内部错误'
+  });
 });
 
 if (fs.existsSync(frontendDistPath)) {

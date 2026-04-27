@@ -29,6 +29,17 @@ export interface UserAccount {
   updatedAt: string;
 }
 
+export interface RobotConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  childIds: string[];
+  controllerOpenIds: string[];
+  allowedChatIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MoneyTransaction {
   id: string;
   childId: string;
@@ -107,6 +118,7 @@ export interface PromptTemplate {
 export interface AppStore {
   users: UserAccount[];
   children: ChildProfile[];
+  robots: RobotConfig[];
   transactions: MoneyTransaction[];
   weeklySummaries: WeeklySummary[];
   config: SystemConfig;

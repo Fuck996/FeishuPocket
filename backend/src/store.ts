@@ -53,6 +53,7 @@ const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'
 const DEFAULT_STORE: AppStore = {
   users: [],
   children: [],
+  robots: [],
   transactions: [],
   weeklySummaries: [],
   models: [],
@@ -92,6 +93,7 @@ export class JsonStore {
     this.data = {
       users: parsed.users ?? [],
       children: parsed.children ?? [],
+      robots: parsed.robots ?? [],
       transactions: parsed.transactions ?? [],
       weeklySummaries: parsed.weeklySummaries ?? [],
       models: parsed.models ?? [],

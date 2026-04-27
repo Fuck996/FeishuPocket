@@ -1,4 +1,4 @@
-import { ChildProfile, OperatorUser, UserInfo, WeeklySummary, ModelConfig, PromptTemplate, SystemConfig } from './types';
+import { ChildProfile, RobotConfig, UserInfo, WeeklySummary, ModelConfig, PromptTemplate, SystemConfig } from './types';
 
 const TOKEN_KEY = 'fp_token';
 
@@ -27,9 +27,17 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     headers
   });
 
-  const json = await response.json();
+  const responseText = await response.text();
+  let json: any;
+  try {
+    json = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    const fallbackMessage = responseText.slice(0, 120) || '非 JSON 响应';
+    throw new Error(`接口返回格式异常：${fallbackMessage}`);
+  }
+
   if (!response.ok || json.success === false) {
-    throw new Error(json.error ?? '请求失败');
+    throw new Error(json.error ?? `请求失败（${response.status}）`);
   }
   return json as T;
 }
@@ -123,22 +131,36 @@ export async function updateSystemConfig(payload: Partial<SystemConfig>): Promis
   });
 }
 
-export async function getOperators(): Promise<OperatorUser[]> {
-  const result = await request<{ success: true; data: OperatorUser[] }>('/api/operators');
+export async function getRobots(): Promise<RobotConfig[]> {
+  const result = await request<{ success: true; data: RobotConfig[] }>('/api/robots');
   return result.data;
 }
 
-export async function createOperator(payload: { username: string; password: string; childIds: string[] }): Promise<void> {
-  await request('/api/operators', {
+export async function createRobot(payload: {
+  name: string;
+  enabled: boolean;
+  childIds: string[];
+  controllerOpenIds: string[];
+  allowedChatIds: string[];
+}): Promise<RobotConfig> {
+  const result = await request<{ success: true; data: RobotConfig }>('/api/robots', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
+  return result.data;
 }
 
-export async function updateOperator(userId: string, payload: { childIds: string[]; boundFeishuUserId: string }): Promise<void> {
-  await request(`/api/operators/${userId}`, {
+export async function updateRobot(robotId: string, payload: Partial<RobotConfig>): Promise<RobotConfig> {
+  const result = await request<{ success: true; data: RobotConfig }>(`/api/robots/${robotId}`, {
     method: 'PUT',
     body: JSON.stringify(payload)
+  });
+  return result.data;
+}
+
+export async function deleteRobot(robotId: string): Promise<void> {
+  await request(`/api/robots/${robotId}`, {
+    method: 'DELETE'
   });
 }
 

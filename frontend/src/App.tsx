@@ -2,18 +2,18 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 import {
   adjustChild,
-  bindFeishu,
   createChild,
   discoverModels,
-  createOperator,
+  createRobot,
   createModel,
   createPrompt,
+  deleteRobot,
   deleteModel,
   deletePrompt,
   getChildren,
   getConfig,
   getModels,
-  getOperators,
+  getRobots,
   getPrompts,
   getSetupStatus,
   getTransactions,
@@ -26,11 +26,11 @@ import {
   setRewardRule,
   setWeeklyNotify,
   updateSystemConfig,
-  updateOperator,
+  updateRobot,
   updateModel,
   updatePrompt
 } from './api';
-import { ChildProfile, ModelConfig, OperatorUser, PromptTemplate, SystemConfig, UserInfo, WeeklySummary } from './types';
+import { ChildProfile, ModelConfig, PromptTemplate, RobotConfig, SystemConfig, UserInfo, WeeklySummary } from './types';
 
 const DEFAULT_AVATAR = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="#E2E8F0"/><circle cx="64" cy="50" r="24" fill="#94A3B8"/><rect x="26" y="84" width="76" height="30" rx="15" fill="#94A3B8"/></svg>'
@@ -55,7 +55,7 @@ function App() {
 
   const [user, setUser] = useState<UserInfo | null>(null);
   const [children, setChildren] = useState<ChildProfile[]>([]);
-  const [operators, setOperators] = useState<OperatorUser[]>([]);
+  const [robots, setRobots] = useState<RobotConfig[]>([]);
   const [transactions, setTransactions] = useState<Array<{ id: string; childId: string; amount: number; reason: string; createdAt: string }>>([]);
   const [summaries, setSummaries] = useState<WeeklySummary[]>([]);
   const [message, setMessage] = useState('');
@@ -71,11 +71,12 @@ function App() {
   const [newChildAvatar, setNewChildAvatar] = useState('');
   const [newChildDaily, setNewChildDaily] = useState(10);
 
-  const [newOperatorName, setNewOperatorName] = useState('');
-  const [newOperatorPassword, setNewOperatorPassword] = useState('123456');
-  const [newOperatorChildIds, setNewOperatorChildIds] = useState<string[]>([]);
+  const [newRobotName, setNewRobotName] = useState('');
+  const [newRobotChildIds, setNewRobotChildIds] = useState<string[]>([]);
+  const [newRobotControllerIds, setNewRobotControllerIds] = useState('');
+  const [newRobotChatIds, setNewRobotChatIds] = useState('');
+  const [newRobotEnabled, setNewRobotEnabled] = useState(true);
 
-  const [bindFeishuId, setBindFeishuId] = useState('');
   const [notifyHour, setNotifyHour] = useState(20);
   const [notifyMinute, setNotifyMinute] = useState(0);
   const [feishuMode, setFeishuMode] = useState<'app' | 'webhook'>('app');
@@ -89,7 +90,7 @@ function App() {
 
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
-  const [activeTab, setActiveTab] = useState<'children' | 'operators' | 'settings' | 'transactions' | 'models' | 'prompts' | 'summaries'>('children');
+  const [activeTab, setActiveTab] = useState<'children' | 'robots' | 'transactions' | 'models' | 'prompts' | 'summaries'>('children');
   const [newModelName, setNewModelName] = useState('');
   const [newModelProvider, setNewModelProvider] = useState<'openai' | 'deepseek' | 'google' | 'custom'>('deepseek');
   const [newModelUrl, setNewModelUrl] = useState('https://api.deepseek.com');
@@ -104,6 +105,21 @@ function App() {
   const childMap = useMemo(() => {
     return new Map(children.map((item) => [item.id, item]));
   }, [children]);
+
+  const childNameMap = useMemo(() => {
+    return new Map(children.map((item) => [item.name, item.id]));
+  }, [children]);
+
+  function parseTextList(value: string): string[] {
+    return Array.from(
+      new Set(
+        value
+          .split(/[,\n]/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      )
+    );
+  }
 
   async function reloadData(currentUser: UserInfo): Promise<void> {
     const [childList, txList, weeklyList, modelList, promptList, config] = await Promise.all([
@@ -130,10 +146,10 @@ function App() {
     setFeishuDefaultChatId(config.feishuDefaultChatId ?? '');
     setLastActiveChatId(config.lastActiveChatId ?? '');
     if (currentUser.role === 'admin') {
-      const operatorList = await getOperators();
-      setOperators(operatorList);
+      const robotList = await getRobots();
+      setRobots(robotList);
     } else {
-      setOperators([]);
+      setRobots([]);
     }
   }
 
@@ -230,33 +246,66 @@ function App() {
     }
   }
 
-  async function onCreateOperator(event: FormEvent): Promise<void> {
+  async function onCreateRobot(event: FormEvent): Promise<void> {
     event.preventDefault();
     try {
-      await createOperator({
-        username: newOperatorName,
-        password: newOperatorPassword,
-        childIds: newOperatorChildIds
+      await createRobot({
+        name: newRobotName.trim(),
+        enabled: newRobotEnabled,
+        childIds: newRobotChildIds,
+        controllerOpenIds: parseTextList(newRobotControllerIds),
+        allowedChatIds: parseTextList(newRobotChatIds)
       });
-      setNewOperatorName('');
-      setNewOperatorPassword('123456');
-      setNewOperatorChildIds([]);
-      await reloadData(user as UserInfo);
-      resetNotice('操作用户创建成功');
+      setNewRobotName('');
+      setNewRobotChildIds([]);
+      setNewRobotControllerIds('');
+      setNewRobotChatIds('');
+      setNewRobotEnabled(true);
+      if (user) {
+        await reloadData(user);
+      }
+      resetNotice('机器人配置已创建');
     } catch (err) {
       setError((err as Error).message);
     }
   }
 
-  async function onBindFeishu(event: FormEvent): Promise<void> {
-    event.preventDefault();
+  async function onQuickEditRobot(robot: RobotConfig): Promise<void> {
+    const childNames = robot.childIds.map((id) => childMap.get(id)?.name ?? id).join(',');
+    const childInput = prompt('请输入要绑定的小孩姓名（逗号分隔）', childNames);
+    if (childInput === null) {
+      return;
+    }
+
+    const controllerInput = prompt('请输入可控制账号 OpenID（逗号分隔）', robot.controllerOpenIds.join(','));
+    if (controllerInput === null) {
+      return;
+    }
+
+    const chatInput = prompt('请输入允许触发的 Chat ID（逗号分隔，可留空表示不限）', robot.allowedChatIds.join(','));
+    if (chatInput === null) {
+      return;
+    }
+
+    const nextChildIds = parseTextList(childInput)
+      .map((name) => childNameMap.get(name) ?? '')
+      .filter(Boolean);
+
+    if (nextChildIds.length === 0) {
+      setError('机器人至少要绑定一个已存在的小孩姓名');
+      return;
+    }
+
     try {
-      await bindFeishu(bindFeishuId);
+      await updateRobot(robot.id, {
+        childIds: nextChildIds,
+        controllerOpenIds: parseTextList(controllerInput),
+        allowedChatIds: parseTextList(chatInput)
+      });
       if (user) {
-        const info = await me();
-        setUser(info);
+        await reloadData(user);
       }
-      resetNotice('飞书账号绑定成功');
+      resetNotice('机器人配置已更新');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -373,7 +422,7 @@ function App() {
     <div className="mobile-shell">
       <div className="hero">
         <h1>飞书零花钱助手</h1>
-        <p>{user.role === 'admin' ? '管理员' : '操作员'}：{user.username}</p>
+        <p>{user.role === 'admin' ? '管理员' : '成员'}：{user.username}</p>
         <button
           className="ghost"
           onClick={() => {
@@ -388,8 +437,7 @@ function App() {
       <section className="card section-nav-card">
         <div className="section-nav">
           <button className={activeTab === 'children' ? 'active' : ''} onClick={() => setActiveTab('children')}>小孩</button>
-          {user.role === 'admin' && <button className={activeTab === 'operators' ? 'active' : ''} onClick={() => setActiveTab('operators')}>操作员</button>}
-          <button className={activeTab === 'settings' ? 'active' : ''} onClick={() => setActiveTab('settings')}>系统配置</button>
+          {user.role === 'admin' && <button className={activeTab === 'robots' ? 'active' : ''} onClick={() => setActiveTab('robots')}>机器人设置</button>}
           <button className={activeTab === 'transactions' ? 'active' : ''} onClick={() => setActiveTab('transactions')}>流水</button>
           <button className={activeTab === 'models' ? 'active' : ''} onClick={() => setActiveTab('models')}>模型</button>
           <button className={activeTab === 'prompts' ? 'active' : ''} onClick={() => setActiveTab('prompts')}>模板</button>
@@ -453,129 +501,145 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'operators' && user.role === 'admin' && (
-        <section className="card">
-          <h2>操作用户管理</h2>
-          <form onSubmit={onCreateOperator} className="form-grid">
-            <label>
-              用户名
-              <input value={newOperatorName} onChange={(e) => setNewOperatorName(e.target.value)} required />
-            </label>
-            <label>
-              初始密码
-              <input value={newOperatorPassword} onChange={(e) => setNewOperatorPassword(e.target.value)} required />
-            </label>
-            <label>
-              可控制小孩
-              <select
-                multiple
-                value={newOperatorChildIds}
-                onChange={(e) => {
-                  const options = Array.from(e.target.selectedOptions).map((item) => item.value);
-                  setNewOperatorChildIds(options);
-                }}
-              >
-                {children.map((child) => (
-                  <option key={child.id} value={child.id}>{child.name}</option>
-                ))}
-              </select>
-            </label>
-            <button type="submit">新增操作用户</button>
-          </form>
+      {activeTab === 'robots' && user.role === 'admin' && (
+        <>
+          <section className="card">
+            <h2>飞书通道配置</h2>
+            <form onSubmit={onSaveFeishuBotConfig} className="form-grid">
+              <label>
+                飞书机器人实现方式
+                <select value={feishuMode} onChange={(e) => setFeishuMode(e.target.value as 'app' | 'webhook')}>
+                  <option value="app">自建应用事件订阅机器人（推荐）</option>
+                  <option value="webhook">群 webhook 机器人（兼容）</option>
+                </select>
+              </label>
 
-          <div className="list">
-            {operators.map((operator) => (
-              <div className="sub-card" key={operator.id}>
-                <p><strong>{operator.username}</strong></p>
-                <p>绑定飞书：{operator.boundFeishuUserId || '未绑定'}</p>
-                <p>控制对象：{operator.childIds.map((id) => childMap.get(id)?.name ?? id).join('、') || '未分配'}</p>
-                <button
-                  onClick={async () => {
-                    await updateOperator(operator.id, {
-                      childIds: operator.childIds,
-                      boundFeishuUserId: prompt('请输入飞书OpenID', operator.boundFeishuUserId ?? '') ?? ''
-                    });
-                    await reloadData(user);
-                    resetNotice('操作用户更新成功');
+              <label>
+                飞书 App ID（自建应用）
+                <input value={feishuAppId} onChange={(e) => setFeishuAppId(e.target.value)} placeholder="cli_xxx" />
+              </label>
+              <label>
+                飞书 App Secret（自建应用）
+                <input type="password" value={feishuAppSecret} onChange={(e) => setFeishuAppSecret(e.target.value)} placeholder="应用凭证" />
+              </label>
+              <label>
+                事件订阅 Verification Token
+                <input value={feishuVerificationToken} onChange={(e) => setFeishuVerificationToken(e.target.value)} placeholder="可选，建议配置" />
+              </label>
+              <label>
+                事件订阅 Signing Secret
+                <input type="password" value={feishuSigningSecret} onChange={(e) => setFeishuSigningSecret(e.target.value)} placeholder="可选，建议配置" />
+              </label>
+              <label>
+                默认发送 Chat ID
+                <input value={feishuDefaultChatId} onChange={(e) => setFeishuDefaultChatId(e.target.value)} placeholder="oc_xxx（群或会话ID）" />
+              </label>
+              <label>
+                当前最近活跃 Chat ID（只读）
+                <input value={lastActiveChatId} readOnly />
+              </label>
+              <label>
+                兼容 webhook 地址（可选）
+                <input value={feishuWebhookUrl} onChange={(e) => setFeishuWebhookUrl(e.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+              </label>
+
+              <button type="submit">保存飞书通道配置</button>
+              <p>事件订阅回调地址：/api/feishu/events（兼容 /api/feishu/webhook）</p>
+            </form>
+
+            <form onSubmit={onSaveWeeklyNotify} className="form-grid inline-grid">
+              <label>
+                每周一通知小时
+                <input type="number" min={0} max={23} value={notifyHour} onChange={(e) => setNotifyHour(Number(e.target.value))} />
+              </label>
+              <label>
+                分钟
+                <input type="number" min={0} max={59} value={notifyMinute} onChange={(e) => setNotifyMinute(Number(e.target.value))} />
+              </label>
+              <button type="submit">保存每周通知时间</button>
+            </form>
+          </section>
+
+          <section className="card">
+            <h2>机器人绑定规则</h2>
+            <form onSubmit={onCreateRobot} className="form-grid">
+              <label>
+                机器人名称
+                <input value={newRobotName} onChange={(e) => setNewRobotName(e.target.value)} required />
+              </label>
+              <label>
+                绑定小孩
+                <select
+                  multiple
+                  value={newRobotChildIds}
+                  onChange={(e) => {
+                    const options = Array.from(e.target.selectedOptions).map((item) => item.value);
+                    setNewRobotChildIds(options);
                   }}
                 >
-                  快速绑定飞书ID
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+                  {children.map((child) => (
+                    <option key={child.id} value={child.id}>{child.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                可控制账号 OpenID（逗号或换行分隔）
+                <textarea value={newRobotControllerIds} onChange={(e) => setNewRobotControllerIds(e.target.value)} required style={{ minHeight: '100px' }} />
+              </label>
+              <label>
+                允许触发的 Chat ID（逗号或换行分隔，可留空）
+                <textarea value={newRobotChatIds} onChange={(e) => setNewRobotChatIds(e.target.value)} style={{ minHeight: '80px' }} />
+              </label>
+              <label>
+                启用状态
+                <select value={newRobotEnabled ? 'enabled' : 'disabled'} onChange={(e) => setNewRobotEnabled(e.target.value === 'enabled')}>
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+              </label>
+              <button type="submit">创建机器人规则</button>
+            </form>
 
-      {activeTab === 'settings' && (
-      <section className="card">
-        <h2>系统配置</h2>
-        {user.role === 'admin' && (
-          <form onSubmit={onSaveFeishuBotConfig} className="form-grid">
-            <label>
-              飞书机器人实现方式
-              <select value={feishuMode} onChange={(e) => setFeishuMode(e.target.value as 'app' | 'webhook')}>
-                <option value="app">自建应用事件订阅机器人（推荐）</option>
-                <option value="webhook">群 webhook 机器人（兼容）</option>
-              </select>
-            </label>
-
-            <label>
-              飞书 App ID（自建应用）
-              <input value={feishuAppId} onChange={(e) => setFeishuAppId(e.target.value)} placeholder="cli_xxx" />
-            </label>
-            <label>
-              飞书 App Secret（自建应用）
-              <input type="password" value={feishuAppSecret} onChange={(e) => setFeishuAppSecret(e.target.value)} placeholder="应用凭证" />
-            </label>
-            <label>
-              事件订阅 Verification Token
-              <input value={feishuVerificationToken} onChange={(e) => setFeishuVerificationToken(e.target.value)} placeholder="可选，建议配置" />
-            </label>
-            <label>
-              事件订阅 Signing Secret
-              <input type="password" value={feishuSigningSecret} onChange={(e) => setFeishuSigningSecret(e.target.value)} placeholder="可选，建议配置" />
-            </label>
-            <label>
-              默认发送 Chat ID
-              <input value={feishuDefaultChatId} onChange={(e) => setFeishuDefaultChatId(e.target.value)} placeholder="oc_xxx（群或会话ID）" />
-            </label>
-            <label>
-              当前最近活跃 Chat ID（只读）
-              <input value={lastActiveChatId} readOnly />
-            </label>
-            <label>
-              兼容 webhook 地址（可选）
-              <input value={feishuWebhookUrl} onChange={(e) => setFeishuWebhookUrl(e.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
-            </label>
-
-            <button type="submit">保存飞书机器人配置</button>
-            <p>事件订阅回调地址：/api/feishu/events（兼容 /api/feishu/webhook）</p>
-          </form>
-        )}
-
-        <form onSubmit={onBindFeishu} className="form-grid">
-          <label>
-            当前账号绑定飞书OpenID
-            <input value={bindFeishuId} onChange={(e) => setBindFeishuId(e.target.value)} placeholder={user.boundFeishuUserId || '例如 ou_xxx'} />
-          </label>
-          <button type="submit">绑定飞书账号</button>
-        </form>
-
-        {user.role === 'admin' && (
-          <form onSubmit={onSaveWeeklyNotify} className="form-grid inline-grid">
-            <label>
-              每周一通知小时
-              <input type="number" min={0} max={23} value={notifyHour} onChange={(e) => setNotifyHour(Number(e.target.value))} />
-            </label>
-            <label>
-              分钟
-              <input type="number" min={0} max={59} value={notifyMinute} onChange={(e) => setNotifyMinute(Number(e.target.value))} />
-            </label>
-            <button type="submit">保存每周通知时间</button>
-          </form>
-        )}
-      </section>
+            <div className="list">
+              {robots.map((robot) => (
+                <div className="sub-card" key={robot.id}>
+                  <p><strong>{robot.name}</strong>（{robot.enabled ? '启用' : '停用'}）</p>
+                  <p>小孩：{robot.childIds.map((id) => childMap.get(id)?.name ?? id).join('、') || '未绑定'}</p>
+                  <p>控制账号：{robot.controllerOpenIds.join('、') || '未配置'}</p>
+                  <p>允许群/会话：{robot.allowedChatIds.join('、') || '不限'}</p>
+                  <div className="inline-grid">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await updateRobot(robot.id, { enabled: !robot.enabled });
+                        await reloadData(user);
+                        resetNotice('机器人状态已更新');
+                      }}
+                    >
+                      {robot.enabled ? '停用' : '启用'}
+                    </button>
+                    <button type="button" onClick={() => onQuickEditRobot(robot)}>
+                      快速编辑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!confirm('确认删除该机器人规则？')) {
+                          return;
+                        }
+                        await deleteRobot(robot.id);
+                        await reloadData(user);
+                        resetNotice('机器人规则已删除');
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
       )}
 
       {activeTab === 'transactions' && (

@@ -28,12 +28,15 @@ export interface WeeklySummary {
   aiSuggestion: string;
 }
 
-export interface OperatorUser {
+export interface RobotConfig {
   id: string;
-  username: string;
-  role: 'admin' | 'operator';
+  name: string;
+  enabled: boolean;
   childIds: string[];
-  boundFeishuUserId?: string;
+  controllerOpenIds: string[];
+  allowedChatIds: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SystemConfig {
