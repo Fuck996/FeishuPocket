@@ -184,6 +184,13 @@ export async function deleteRobot(robotId: string): Promise<void> {
   });
 }
 
+export async function testRobot(robotId: string): Promise<{ message: string }> {
+  const result = await request<{ success: true; message: string }>(`/api/robots/${robotId}/test`, {
+    method: 'POST'
+  });
+  return { message: result.message };
+}
+
 export async function getTransactions(): Promise<MoneyTransaction[]> {
   const result = await request<{ success: true; data: MoneyTransaction[] }>('/api/transactions');
   return result.data;

@@ -974,6 +974,36 @@ app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res)
     }
     res.json({ success: true, message: '机器人已删除' });
 });
+app.post('/api/robots/:robotId/test', requireAuth, requireRole('admin'), async (req, res) => {
+    const { robotId } = req.params;
+    const robot = store.getSnapshot().robots.find((r) => r.id === robotId);
+    if (!robot) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    try {
+        const target = resolveTargetForRobot(robot);
+        if ((target.mode === 'app' && (!target.appId || !target.appSecret || !target.chatId)) ||
+            (target.mode === 'webhook' && !target.webhookUrl)) {
+            res.status(400).json({ success: false, error: '凭证或默认 Chat ID 未配置，无法发送' });
+            return;
+        }
+        await sendFeishuCard(target, {
+            title: '✅ 连接测试',
+            lines: [
+                `**机器人名称**：${robot.name}`,
+                `**接入方式**：${robot.feishuMode === 'webhook' ? '群 webhook' : '自建应用 WS 长连接'}`,
+                `**时间**：${new Date().toLocaleString('zh-CN')}`,
+                `**状态**：消息发送成功，飞书连接正常 🎉`
+            ]
+        });
+        res.json({ success: true, message: '测试消息已发送' });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : '发送失败';
+        res.status(500).json({ success: false, error: message });
+    }
+});
 app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async (req, res) => {
     const { childId, amount } = req.body;
     if (!childId || amount === undefined || amount < 0) {

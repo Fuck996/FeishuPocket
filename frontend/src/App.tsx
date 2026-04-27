@@ -31,7 +31,8 @@ import {
   updateChild,
   updateModel,
   updatePrompt,
-  updateRobot
+  updateRobot,
+  testRobot
 } from './api';
 import { ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, UserInfo, WeeklySummary } from './types';
 
@@ -1530,6 +1531,23 @@ function App() {
 
             <div className="action-row">
               <button type="submit">保存机器人</button>
+              {robotView.mode === 'edit' && (
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={async () => {
+                    const id = (robotView as { mode: 'edit'; robotId: string }).robotId;
+                    try {
+                      const result = await testRobot(id);
+                      showNotice(result.message, 'success');
+                    } catch (error) {
+                      handleRequestError(error);
+                    }
+                  }}
+                >
+                  测试发送
+                </button>
+              )}
               {robotView.mode === 'edit' && <button type="button" className="danger-button" onClick={handleRobotDelete}>删除机器人</button>}
             </div>
           </form>
