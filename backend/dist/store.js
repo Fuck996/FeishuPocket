@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 const BUILT_IN_DEEPSEEK_MODEL_ID = 'built-in-deepseek';
-const BUILT_IN_PROMPT_VERSION = 'pocket-money-v7';
+const BUILT_IN_PROMPT_VERSION = 'pocket-money-v8';
 const BUILT_IN_MCP_PROMPTS = [
     {
         id: 'vscode-chat-report',
         name: '零花钱MCP指令识别',
         purpose: 'pocket-money',
-        content: `你是零花钱指令识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n处理顺序（必须遵守）：\n第一步：优先匹配精确指令（格式正确即执行，不依赖 AI）\n- 发放零花钱\n- 余额增加：n（中英文冒号都可）\n- 余额减少：n（中英文冒号都可）\n- 查询余额 / 余额\n\n第二步：若不属于精确指令，再走 AI 识别自然语言，主要用于消费相关对话。\n\n第三步：精确指令和 AI 都未识别时，返回 unknown。\n\n小孩与控制账号绑定关系已由机器人配置确定，不需要推断权限，只做意图识别。\n\nAI 路径必须支持的操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置额外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（识别时 amount 一律输出正数）\n4) 设置每周零花钱统计通知时间\n5) 识别“完成某项目”触发奖励（reward_from_message）\n6) 查询余额（query_balance）\n\n口语化兼容示例：\n- “小明每天改12”\n- “给小明配个家务奖励5块”\n- “小明今天买文具花了18”\n- “小明完成了家务”\n- “查询余额”\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 控制账号在群聊和单聊发言都可触发\n- 信息不足或冲突时返回 unknown\n\n输出要求：\n- 只输出 JSON，不输出触发者身份判断或触发原因分析\n- 字段只允许：intent、childName、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | query_balance | unknown`,
+        content: `你是零花钱指令识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n处理顺序（必须遵守）：\n第一步：优先匹配精确指令（格式正确即执行，不依赖 AI）\n- 发放零花钱\n- 余额增加：n（中英文冒号都可）\n- 余额减少：n（中英文冒号都可）\n- 查询余额 / 余额\n\n第二步：若不属于精确指令，再走 AI 识别自然语言，主要用于消费相关对话。\n\n第三步：精确指令和 AI 都未识别时，返回 unknown。\n\n小孩与控制账号绑定关系已由机器人配置确定，不需要 AI 识别 childName。\n\nAI 路径必须支持的操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置额外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（识别时 amount 一律输出正数）\n4) 设置每周零花钱统计通知时间\n5) 识别“完成某项目”触发奖励（reward_from_message）\n6) 查询余额（query_balance）\n\n口语化兼容示例：\n- “每天改12”\n- “配个家务奖励5块”\n- “今天买文具花了18”\n- “完成了家务”\n- “查询余额”\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 控制账号在群聊和单聊发言都可触发\n- 信息不足或冲突时返回 unknown\n\n输出要求：\n- 只输出 JSON，不输出触发者身份判断或触发原因分析\n- 字段只允许：intent、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | query_balance | unknown`,
         isBuiltIn: true,
         usageCount: 0
     },

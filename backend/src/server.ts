@@ -22,12 +22,36 @@ import { ChildProfile, MoneyTransaction, ParsedBotAction, UserAccount, UserRole,
 // 内存日志，按机器人 ID 存储，最多保留每机器人 200 条
 const botLogs = new Map<string, BotLogEntry[]>();
 const BOT_LOG_MAX = 200;
+const inboundMessageDedup = new Map<string, number>();
+const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
 
 function pushBotLog(entry: BotLogEntry): void {
   const list = botLogs.get(entry.robotId) ?? [];
   list.push(entry);
   if (list.length > BOT_LOG_MAX) list.splice(0, list.length - BOT_LOG_MAX);
   botLogs.set(entry.robotId, list);
+}
+
+function cleanupInboundMessageDedup(now: number): void {
+  for (const [messageId, expireAt] of inboundMessageDedup.entries()) {
+    if (expireAt <= now) {
+      inboundMessageDedup.delete(messageId);
+    }
+  }
+}
+
+function shouldProcessInboundMessage(messageId?: string): boolean {
+  if (!messageId) {
+    return true;
+  }
+  const now = Date.now();
+  cleanupInboundMessageDedup(now);
+  const expireAt = inboundMessageDedup.get(messageId);
+  if (expireAt && expireAt > now) {
+    return false;
+  }
+  inboundMessageDedup.set(messageId, now + INBOUND_MESSAGE_DEDUP_TTL_MS);
+  return true;
 }
 
 type AuthedRequest = Request & {
@@ -170,6 +194,7 @@ function extractFeishuEvent(reqBody: unknown): {
   messageType?: string;
   contentRaw?: string;
   chatId?: string;
+  messageId?: string;
 } {
   const body = reqBody as Record<string, unknown>;
   const event = (body.event as Record<string, unknown> | undefined) ?? body;
@@ -186,6 +211,7 @@ function extractFeishuEvent(reqBody: unknown): {
   const senderType = (sender.sender_type as string | undefined) ?? (sender.type as string | undefined);
   const messageType = (message.message_type as string | undefined) ?? (message.type as string | undefined);
   const chatId = (message.chat_id as string | undefined) ?? ((event.chat as Record<string, unknown> | undefined)?.chat_id as string | undefined);
+  const messageId = message.message_id as string | undefined;
   const contentField = message.content;
 
   let contentRaw: string | undefined;
@@ -202,7 +228,8 @@ function extractFeishuEvent(reqBody: unknown): {
     senderType,
     messageType,
     contentRaw,
-    chatId
+    chatId,
+    messageId
   };
 }
 
@@ -798,9 +825,16 @@ function pushWebhookRejectLog(req: AuthedRequest, reason: string): void {
   });
 }
 
-function pickRobotForAction(robots: RobotConfig[], childName?: string): RobotConfig | undefined {
+function pickRobotForAction(robots: RobotConfig[], chatId?: string, childName?: string): RobotConfig | undefined {
   if (robots.length <= 1) {
     return robots[0];
+  }
+
+  if (chatId) {
+    const exact = robots.find((robot) => robot.lastActiveChatId === chatId || robot.feishuDefaultChatId === chatId);
+    if (exact) {
+      return exact;
+    }
   }
 
   if (!childName) {
@@ -1007,7 +1041,7 @@ async function initFeishuWsClient(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const eventDispatcher = new Lark.EventDispatcher({}).register({
       'im.message.receive_v1': async (data: Record<string, unknown>) => {
-        const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(data);
+        const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
         if (chatId && robotId) {
           store.update((draft) => {
             const r = draft.robots.find((item) => item.id === robotId);
@@ -1015,7 +1049,7 @@ async function initFeishuWsClient(): Promise<void> {
           });
         }
         try {
-          await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+          await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
         } catch (error) {
           console.error('[飞书WS] 消息处理失败:', error);
         }
@@ -1088,7 +1122,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.14' });
+  res.json({ success: true, version: '0.3.15' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -1873,7 +1907,8 @@ async function processBotMessage(
   senderType: string | undefined,
   messageType: string | undefined,
   contentRaw: string | undefined,
-  chatId: string | undefined
+  chatId: string | undefined,
+  messageId?: string
 ): Promise<ParsedBotAction | null> {
   const diagnosticRobot = resolveDiagnosticRobot(chatId);
   const previewText = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
@@ -1906,6 +1941,10 @@ async function processBotMessage(
     logIgnoredInbound('ignored_missing_message_content');
     return null;
   }
+  if (!shouldProcessInboundMessage(messageId)) {
+    logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
+    return null;
+  }
   if (messageType && messageType !== 'text' && messageType !== 'post') {
     logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
     return null;
@@ -1928,7 +1967,7 @@ async function processBotMessage(
   }
 
   // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
-  const primaryRobot = matchedRobots[0];
+  const primaryRobot = pickRobotForAction(matchedRobots, chatId) ?? matchedRobots[0];
 
   // 写入"收到消息"日志
   const inLogId = nanoid();
@@ -1944,6 +1983,7 @@ async function processBotMessage(
   });
 
   let action = parsePreciseBotCommand(text);
+  const matchedByPrecise = Boolean(action);
   if (!action) {
     const parserModel = resolveParserModelConfig();
     try {
@@ -1988,6 +2028,11 @@ async function processBotMessage(
     return null;
   }
 
+  // AI 路径不依赖 childName，由机器人绑定关系决定目标孩子。
+  if (!matchedByPrecise) {
+    action.childName = undefined;
+  }
+
   // 更新入站日志的识别意图
   const list = botLogs.get(primaryRobot.id);
   const inLog = list?.find((l) => l.id === inLogId);
@@ -2020,7 +2065,7 @@ async function processBotMessage(
     return null;
   }
 
-  const robot = pickRobotForAction(matchedRobots, action.childName);
+  const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
   if (!robot) return null;
 
   const targetChild = resolveChildFromAction(action, robot);
@@ -2292,7 +2337,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
     return;
   }
 
-  const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+  const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
 
   if (chatId) {
     // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
@@ -2306,7 +2351,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
   }
 
   try {
-    const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+    const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
     if (!action) {
       res.json({ success: true, ignored: true });
       return;

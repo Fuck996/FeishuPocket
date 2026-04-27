@@ -149,30 +149,30 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
         const endpoint = buildChatCompletionsEndpoint(openAiBaseUrl);
         const prompt = `你是一个家庭零花钱系统指令解析器。
   请只返回 JSON 对象，不要代码块，不要额外解释。
-  字段: intent, childName, amount, rewardKeyword, reason, hour, minute。
+  字段: intent, amount, rewardKeyword, reason, hour, minute。
   intent 只允许: set_daily_allowance|set_reward_rule|deduct_expense|set_weekly_notify|reward_from_message|query_balance|unknown。
 
   识别规则:
   1) amount 单位是元，输出 number。若用户说“8块”“8元钱”，统一转成 8。
   2) deduct_expense 的 amount 始终输出正数，符号由业务层处理。
   3) 设置每周通知时，hour/minute 都必须返回，且是 0-23 / 0-59。
-  4) childName 缺失时可不返回，让业务层走默认孩子。
+  4) childName 由业务层根据机器人绑定确定，不要返回 childName。
   5) 对口语化表达也要识别，例如：
-     - “小明每天改12” => set_daily_allowance
-     - “给小明配个家务奖励5元” => set_reward_rule
-     - “小明今天买文具花了18” => deduct_expense
-     - “小明完成家务了” => reward_from_message
+    - “每天改12” => set_daily_allowance
+    - “配个家务奖励5元” => set_reward_rule
+    - “今天买文具花了18” => deduct_expense
+    - “完成家务了” => reward_from_message
       - “查询余额” / “余额” => query_balance
   6) 仅当信息不足或语义冲突时返回 unknown。
 
-  示例A: "设置小明每日零花钱12元" -> {"intent":"set_daily_allowance","childName":"小明","amount":12}
+  示例A: "设置每日零花钱12元" -> {"intent":"set_daily_allowance","amount":12}
   示例B: "把每天零花钱改成10块" -> {"intent":"set_daily_allowance","amount":10}
-  示例C: "设置小明奖励项目家务5元" -> {"intent":"set_reward_rule","childName":"小明","rewardKeyword":"家务","amount":5}
-  示例D: "扣除小明8元买零食" -> {"intent":"deduct_expense","childName":"小明","amount":8,"reason":"买零食"}
+  示例C: "设置奖励项目家务5元" -> {"intent":"set_reward_rule","rewardKeyword":"家务","amount":5}
+  示例D: "扣除8元买零食" -> {"intent":"deduct_expense","amount":8,"reason":"买零食"}
   示例E: "设置每周统计通知20:30" -> {"intent":"set_weekly_notify","hour":20,"minute":30}
-  示例F: "小明完成了家务" -> {"intent":"reward_from_message","childName":"小明","rewardKeyword":"家务","reason":"完成家务"}
+  示例F: "完成了家务" -> {"intent":"reward_from_message","rewardKeyword":"家务","reason":"完成家务"}
   示例G: "查询余额" -> {"intent":"query_balance"}
-  示例H: "查小明余额" -> {"intent":"query_balance","childName":"小明"}
+  示例H: "查余额" -> {"intent":"query_balance"}
 
   消息: ${message}`;
         const response = await fetch(endpoint, {

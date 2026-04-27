@@ -16,12 +16,34 @@ import { checkAllModelBalances } from './modelBalance.js';
 // 内存日志，按机器人 ID 存储，最多保留每机器人 200 条
 const botLogs = new Map();
 const BOT_LOG_MAX = 200;
+const inboundMessageDedup = new Map();
+const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
 function pushBotLog(entry) {
     const list = botLogs.get(entry.robotId) ?? [];
     list.push(entry);
     if (list.length > BOT_LOG_MAX)
         list.splice(0, list.length - BOT_LOG_MAX);
     botLogs.set(entry.robotId, list);
+}
+function cleanupInboundMessageDedup(now) {
+    for (const [messageId, expireAt] of inboundMessageDedup.entries()) {
+        if (expireAt <= now) {
+            inboundMessageDedup.delete(messageId);
+        }
+    }
+}
+function shouldProcessInboundMessage(messageId) {
+    if (!messageId) {
+        return true;
+    }
+    const now = Date.now();
+    cleanupInboundMessageDedup(now);
+    const expireAt = inboundMessageDedup.get(messageId);
+    if (expireAt && expireAt > now) {
+        return false;
+    }
+    inboundMessageDedup.set(messageId, now + INBOUND_MESSAGE_DEDUP_TTL_MS);
+    return true;
 }
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -142,6 +164,7 @@ function extractFeishuEvent(reqBody) {
     const senderType = sender.sender_type ?? sender.type;
     const messageType = message.message_type ?? message.type;
     const chatId = message.chat_id ?? event.chat?.chat_id;
+    const messageId = message.message_id;
     const contentField = message.content;
     let contentRaw;
     if (typeof contentField === 'string') {
@@ -158,7 +181,8 @@ function extractFeishuEvent(reqBody) {
         senderType,
         messageType,
         contentRaw,
-        chatId
+        chatId,
+        messageId
     };
 }
 function extractMessageText(contentRaw, messageType) {
@@ -664,9 +688,15 @@ function pushWebhookRejectLog(req, reason) {
         error: reason
     });
 }
-function pickRobotForAction(robots, childName) {
+function pickRobotForAction(robots, chatId, childName) {
     if (robots.length <= 1) {
         return robots[0];
+    }
+    if (chatId) {
+        const exact = robots.find((robot) => robot.lastActiveChatId === chatId || robot.feishuDefaultChatId === chatId);
+        if (exact) {
+            return exact;
+        }
     }
     if (!childName) {
         return robots[0];
@@ -844,7 +874,7 @@ async function initFeishuWsClient() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const eventDispatcher = new Lark.EventDispatcher({}).register({
             'im.message.receive_v1': async (data) => {
-                const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(data);
+                const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
                 if (chatId && robotId) {
                     store.update((draft) => {
                         const r = draft.robots.find((item) => item.id === robotId);
@@ -853,7 +883,7 @@ async function initFeishuWsClient() {
                     });
                 }
                 try {
-                    await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+                    await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
                 }
                 catch (error) {
                     console.error('[飞书WS] 消息处理失败:', error);
@@ -924,7 +954,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.14' });
+    res.json({ success: true, version: '0.3.15' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1567,7 +1597,7 @@ async function handleCardAction(eventData) {
     }
 }
 // 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
-async function processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId) {
+async function processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId) {
     const diagnosticRobot = resolveDiagnosticRobot(chatId);
     const previewText = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
     const logIgnoredInbound = (reason) => {
@@ -1598,6 +1628,10 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         logIgnoredInbound('ignored_missing_message_content');
         return null;
     }
+    if (!shouldProcessInboundMessage(messageId)) {
+        logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
+        return null;
+    }
     if (messageType && messageType !== 'text' && messageType !== 'post') {
         logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
         return null;
@@ -1617,7 +1651,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         return null;
     }
     // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
-    const primaryRobot = matchedRobots[0];
+    const primaryRobot = pickRobotForAction(matchedRobots, chatId) ?? matchedRobots[0];
     // 写入"收到消息"日志
     const inLogId = nanoid();
     pushBotLog({
@@ -1631,6 +1665,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         status: 'ok'
     });
     let action = parsePreciseBotCommand(text);
+    const matchedByPrecise = Boolean(action);
     if (!action) {
         const parserModel = resolveParserModelConfig();
         try {
@@ -1674,6 +1709,10 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
     if (!action) {
         return null;
     }
+    // AI 路径不依赖 childName，由机器人绑定关系决定目标孩子。
+    if (!matchedByPrecise) {
+        action.childName = undefined;
+    }
     // 更新入站日志的识别意图
     const list = botLogs.get(primaryRobot.id);
     const inLog = list?.find((l) => l.id === inLogId);
@@ -1707,7 +1746,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         catch { /* 通知失败不阻断 */ }
         return null;
     }
-    const robot = pickRobotForAction(matchedRobots, action.childName);
+    const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
     const targetChild = resolveChildFromAction(action, robot);
@@ -1984,7 +2023,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
         res.json({ success: true, ignored: true, reason: 'unsupported_event_type' });
         return;
     }
-    const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+    const { senderOpenId, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
     if (chatId) {
         // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
         const matchedRobot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook');
@@ -1997,7 +2036,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
         }
     }
     try {
-        const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId);
+        const action = await processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId, messageId);
         if (!action) {
             res.json({ success: true, ignored: true });
             return;
