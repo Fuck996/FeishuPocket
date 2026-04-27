@@ -539,6 +539,19 @@ function resolveMatchedRobots(senderOpenId) {
         return true;
     });
 }
+function resolveDiagnosticRobot(chatId) {
+    const enabledRobots = store.getSnapshot().robots.filter((r) => r.enabled);
+    if (enabledRobots.length === 0) {
+        return undefined;
+    }
+    if (chatId) {
+        const exact = enabledRobots.find((r) => r.lastActiveChatId === chatId || r.feishuDefaultChatId === chatId);
+        if (exact) {
+            return exact;
+        }
+    }
+    return enabledRobots[0];
+}
 function pickRobotForAction(robots, childName) {
     if (robots.length <= 1) {
         return robots[0];
@@ -747,7 +760,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.7' });
+    res.json({ success: true, version: '0.3.8' });
 });
 app.get('/api/setup-status', (_req, res) => {
     const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
@@ -1369,18 +1382,54 @@ async function handleCardAction(eventData) {
 }
 // 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
 async function processBotMessage(senderOpenId, senderType, messageType, contentRaw, chatId) {
-    if (senderType === 'bot')
+    const diagnosticRobot = resolveDiagnosticRobot(chatId);
+    const previewText = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
+    const logIgnoredInbound = (reason) => {
+        if (!diagnosticRobot) {
+            return;
+        }
+        pushBotLog({
+            id: nanoid(),
+            robotId: diagnosticRobot.id,
+            time: new Date().toISOString(),
+            direction: 'in',
+            senderOpenId,
+            chatId,
+            rawText: previewText,
+            status: 'ignored',
+            error: reason
+        });
+    };
+    if (senderType === 'bot') {
+        logIgnoredInbound('ignored_sender_type_bot');
         return null;
-    if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text' && messageType !== 'post'))
+    }
+    if (!senderOpenId) {
+        logIgnoredInbound('ignored_missing_sender_open_id');
         return null;
-    if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId))
+    }
+    if (!contentRaw) {
+        logIgnoredInbound('ignored_missing_message_content');
         return null;
+    }
+    if (messageType && messageType !== 'text' && messageType !== 'post') {
+        logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
+        return null;
+    }
+    if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) {
+        logIgnoredInbound('ignored_by_ignoreBotUserIds');
+        return null;
+    }
     const matchedRobots = resolveMatchedRobots(senderOpenId ?? '');
-    if (matchedRobots.length === 0)
+    if (matchedRobots.length === 0) {
+        logIgnoredInbound('ignored_no_matched_robot_or_controller_openid_not_allowed');
         return null;
+    }
     const text = extractMessageText(contentRaw, messageType).trim();
-    if (!text)
+    if (!text) {
+        logIgnoredInbound('ignored_empty_text_after_extract');
         return null;
+    }
     // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
     const primaryRobot = matchedRobots[0];
     // 写入"收到消息"日志

@@ -654,6 +654,22 @@ function resolveMatchedRobots(senderOpenId: string): RobotConfig[] {
   });
 }
 
+function resolveDiagnosticRobot(chatId?: string): RobotConfig | undefined {
+  const enabledRobots = store.getSnapshot().robots.filter((r) => r.enabled);
+  if (enabledRobots.length === 0) {
+    return undefined;
+  }
+
+  if (chatId) {
+    const exact = enabledRobots.find((r) => r.lastActiveChatId === chatId || r.feishuDefaultChatId === chatId);
+    if (exact) {
+      return exact;
+    }
+  }
+
+  return enabledRobots[0];
+}
+
 function pickRobotForAction(robots: RobotConfig[], childName?: string): RobotConfig | undefined {
   if (robots.length <= 1) {
     return robots[0];
@@ -889,7 +905,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.7' });
+  res.json({ success: true, version: '0.3.8' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1650,15 +1666,57 @@ async function processBotMessage(
   contentRaw: string | undefined,
   chatId: string | undefined
 ): Promise<ParsedBotAction | null> {
-  if (senderType === 'bot') return null;
-  if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text' && messageType !== 'post')) return null;
-  if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) return null;
+  const diagnosticRobot = resolveDiagnosticRobot(chatId);
+  const previewText = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
+  const logIgnoredInbound = (reason: string): void => {
+    if (!diagnosticRobot) {
+      return;
+    }
+    pushBotLog({
+      id: nanoid(),
+      robotId: diagnosticRobot.id,
+      time: new Date().toISOString(),
+      direction: 'in',
+      senderOpenId,
+      chatId,
+      rawText: previewText,
+      status: 'ignored',
+      error: reason
+    });
+  };
+
+  if (senderType === 'bot') {
+    logIgnoredInbound('ignored_sender_type_bot');
+    return null;
+  }
+  if (!senderOpenId) {
+    logIgnoredInbound('ignored_missing_sender_open_id');
+    return null;
+  }
+  if (!contentRaw) {
+    logIgnoredInbound('ignored_missing_message_content');
+    return null;
+  }
+  if (messageType && messageType !== 'text' && messageType !== 'post') {
+    logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
+    return null;
+  }
+  if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) {
+    logIgnoredInbound('ignored_by_ignoreBotUserIds');
+    return null;
+  }
 
   const matchedRobots = resolveMatchedRobots(senderOpenId ?? '');
-  if (matchedRobots.length === 0) return null;
+  if (matchedRobots.length === 0) {
+    logIgnoredInbound('ignored_no_matched_robot_or_controller_openid_not_allowed');
+    return null;
+  }
 
   const text = extractMessageText(contentRaw, messageType).trim();
-  if (!text) return null;
+  if (!text) {
+    logIgnoredInbound('ignored_empty_text_after_extract');
+    return null;
+  }
 
   // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
   const primaryRobot = matchedRobots[0];
