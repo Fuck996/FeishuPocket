@@ -1,5 +1,5 @@
 # 需求与BUG跟踪文档
-**版本：** v0.3.32 | **更新时间：** 2026-04-28 | **内容：** 卡片发送前优先复用已存在 img_key，避免重复上传
+**版本：** v0.3.33 | **更新时间：** 2026-04-28 | **内容：** 修复操作人显示 open_id 与余额变动卡片头像不显示两个BUG
 
 ## 待开发
 
@@ -40,11 +40,14 @@
 | BUG-002 | 🔴 | 模型添加失败且错误信息不可读 | 前端未兼容非 JSON 响应，导致真实错误被 JSON parse 异常掩盖 | ✅ 已修复 | v0.2.2 |
 | BUG-003 | 🔴 | 后端启动就发放一笔零花钱 | 升级到v0.2.9后 lastDailyGrantTimes 为空，cron首次触发时未检查旧 lastDailyGrantDate | ✅ 已修复 | v0.3.0 |
 | BUG-004 | 🟡 | 桌面端浏览器样式与移动端差异大 | PC端使用固定390×844px iPhone框架，fixed元素定位基于viewport导致不对齐 | ✅ 已修复 | v0.3.0 |
+| BUG-005 | 🔴 | 操作人显示飞书 open_id 而非用户名 | resolveActorDisplay 在所有名称查询途径失败时直接返回 actorUserId（原始 open_id），未兜底为"未知用户" | ✅ 已修复 | v0.3.33 |
+| BUG-006 | 🔴 | 余额变动卡片不显示孩子头像 | applyTransaction 用函数入口旧快照的 child.feishuAvatarKey，而启动补齐写入在其后，导致 key 始终为 undefined；改为使用余额更新后的 updatedChild.feishuAvatarKey | ✅ 已修复 | v0.3.33 |
 
 ## 版本记录
 
 | 版本 | 发布日期 | 主要变更 |
 |------|----------|----------|
+| v0.3.33 | 2026-04-28 | 修复操作人显示 open_id：resolveActorDisplay 对 bot 来源查询失败时返回"未知用户"；修复余额变动卡片头像不显示：applyTransaction 改用余额更新后的 updatedChild.feishuAvatarKey（最新快照），避免启动补齐写入时序差异导致 key 为空 |
 | v0.3.32 | 2026-04-28 | 优化卡片发送前头像逻辑：若孩子已存在 feishuAvatarKey，则直接使用 img_key 渲染卡片，不再重复上传；仅在 key 为空时才补上传 |
 | v0.3.31 | 2026-04-28 | 调整孩子头像流程：后台创建/更新孩子头像时立即上传飞书图片并获取 img_key，写入孩子信息并持久化；头像变更自动失效旧 key 并重传；服务启动时自动补齐 feishuAvatarKey 为空的历史孩子数据 |
 | v0.3.30 | 2026-04-28 | 接入飞书上传图片接口：发送余额变动卡片前按孩子头像上传图片并获取 img_key；头像未变则复用已缓存 key，头像变更时自动失效并重新上传；模板变量新增 child_avatar_key / childAvatarKey / avatar_key |

@@ -770,7 +770,14 @@ function resolveActorDisplay(source: MoneyTransaction['source'], actorUserId?: s
   const actor = store.getSnapshot().users.find((u) =>
     u.id === actorUserId || u.username === actorUserId || u.boundFeishuUserId === actorUserId
   );
-  return actor?.username ?? actorUserId;
+  if (actor?.username) {
+    return actor.username;
+  }
+  // source 为 bot 时，actorUserId 是飞书 open_id；查询不到真实姓名时不暴露 ID
+  if (source === 'bot') {
+    return '未知用户';
+  }
+  return actorUserId ?? '未知用户';
 }
 
 function buildBalanceSnapshotCardPayload(child: ChildProfile): FeishuCardPayload {
@@ -1008,8 +1015,11 @@ async function applyTransaction(input: {
   const currentBalance = updatedChild?.balance ?? child.balance;
   const { date, time } = formatDateTimeCn(transaction.createdAt);
   const avatarUrl = resolveAvatarForFeishu(child);
-  // 发卡前若已有 img_key，直接复用，不再重复上传。
-  const avatarKey = child.feishuAvatarKey ?? await ensureChildFeishuAvatarKey(child);
+  // 优先使用最新快照的 feishuAvatarKey（可能已被启动补齐写入），避免使用开头旧快照的 child 对象
+  const avatarKey = (updatedChild?.feishuAvatarKey) ?? await ensureChildFeishuAvatarKey(child);
+  if (!avatarKey) {
+    console.warn(`[卡片头像] 孩子 ${child.name} 的 img_key 为空，头像将不显示。请确认机器人已配置飞书应用 AppID/AppSecret。`);
+  }
 
   const payload: FeishuCardPayload = {
     title: '零花钱金额变动通知',
@@ -1478,7 +1488,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.32' });
+  res.json({ success: true, version: '0.3.33' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
