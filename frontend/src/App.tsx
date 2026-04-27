@@ -206,6 +206,7 @@ function App() {
 
   if (!user) {
     const showInitCard = adminInitialized === false;
+    const showLoginCard = adminInitialized === true;
 
     return (
       <div className="mobile-shell">
@@ -231,22 +232,30 @@ function App() {
           </section>
         )}
 
-        <section className="card">
-          <h2>登录</h2>
-          <form onSubmit={onLoginSubmit} className="form-grid">
-            <label>
-              用户名
-              <input value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} />
-            </label>
-            <label>
-              密码
-              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
-            </label>
-            <button type="submit">登录系统</button>
-          </form>
-          {error && <p className="notice error">{error}</p>}
-          {message && <p className="notice ok">{message}</p>}
-        </section>
+        {showLoginCard && (
+          <section className="card">
+            <h2>登录</h2>
+            <form onSubmit={onLoginSubmit} className="form-grid">
+              <label>
+                用户名
+                <input value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} />
+              </label>
+              <label>
+                密码
+                <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+              </label>
+              <button type="submit">登录系统</button>
+            </form>
+            {error && <p className="notice error">{error}</p>}
+            {message && <p className="notice ok">{message}</p>}
+          </section>
+        )}
+
+        {adminInitialized === null && (
+          <section className="card">
+            <p>正在检查初始化状态...</p>
+          </section>
+        )}
       </div>
     );
   }
