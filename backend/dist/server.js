@@ -810,9 +810,10 @@ const scheduler = new SchedulerService({
 }, snapshot.config.weeklyNotify.hour, snapshot.config.weeklyNotify.minute);
 // 飞书 WS 长连接客户端（appId/appSecret 配置后自动连接）
 let wsClientStarted = false;
+let wsClientAppId;
 function initFeishuWsClient() {
-    // 使用第一个配置了 appId/appSecret 的机器人
-    const robot = store.getSnapshot().robots.find((r) => r.feishuAppId && r.feishuAppSecret);
+    // 仅使用启用且 app 模式的机器人建立 WS 长连接
+    const robot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook' && r.feishuAppId && r.feishuAppSecret);
     const appId = robot?.feishuAppId;
     const appSecret = robot?.feishuAppSecret;
     const robotId = robot?.id;
@@ -821,7 +822,12 @@ function initFeishuWsClient() {
         return;
     }
     if (wsClientStarted) {
-        console.log('[飞书WS] 已启动，若需更新配置请重启服务');
+        if (wsClientAppId && wsClientAppId !== appId) {
+            console.log('[飞书WS] 检测到 AppID 变更，当前进程仍使用旧连接，需重启服务后生效');
+        }
+        else {
+            console.log('[飞书WS] 已启动，若需更新配置请重启服务');
+        }
         return;
     }
     try {
@@ -859,6 +865,7 @@ function initFeishuWsClient() {
         const wsClient = new Lark.WSClient({ appId, appSecret });
         wsClient.start({ eventDispatcher });
         wsClientStarted = true;
+        wsClientAppId = appId;
         console.log(`[飞书WS] 长连接客户端已启动，AppID: ${appId}`);
     }
     catch (error) {
@@ -872,7 +879,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.12' });
+    res.json({ success: true, version: '0.3.13' });
 });
 app.get('/api/setup-status', (_req, res) => {
     const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
@@ -1129,6 +1136,8 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
     store.update((draft) => {
         draft.robots.push(robot);
     });
+    // 新增机器人后立即尝试初始化 WS，避免“启动时未配置”导致后续不接收消息
+    initFeishuWsClient();
     res.json({ success: true, data: robot });
 });
 app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -1181,6 +1190,8 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
         robot.updatedAt = new Date().toISOString();
         updatedRobot = robot;
     });
+    // 更新机器人后立即尝试初始化 WS，确保新增凭证可在当前进程生效
+    initFeishuWsClient();
     res.json({ success: true, data: updatedRobot });
 });
 app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -1419,6 +1430,8 @@ app.put('/api/config/system', requireAuth, requireRole('admin'), (req, res) => {
         if (feishuDefaultChatId !== undefined)
             robot.feishuDefaultChatId = feishuDefaultChatId;
     });
+    // 兼容旧端点更新飞书配置后，立即尝试初始化 WS
+    initFeishuWsClient();
     res.json({ success: true, message: '配置已更新到机器人' });
 });
 app.get('/api/transactions', requireAuth, (req, res) => {
