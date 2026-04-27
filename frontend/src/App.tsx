@@ -13,6 +13,7 @@ import {
   getModels,
   getOperators,
   getPrompts,
+  getSetupStatus,
   getTransactions,
   getWeeklySummaries,
   initAdmin,
@@ -36,6 +37,7 @@ function App() {
   const [summaries, setSummaries] = useState<WeeklySummary[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [adminInitialized, setAdminInitialized] = useState<boolean | null>(null);
 
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('admin');
@@ -91,6 +93,14 @@ function App() {
   }
 
   useEffect(() => {
+    getSetupStatus()
+      .then((status) => {
+        setAdminInitialized(status.adminInitialized);
+      })
+      .catch(() => {
+        setAdminInitialized(false);
+      });
+
     me()
       .then(async (info) => {
         setUser(info);
@@ -109,7 +119,7 @@ function App() {
   async function onLoginSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
     try {
-      const info = await login(loginUsername, loginPassword);
+      const info = await login(loginUsername.trim(), loginPassword);
       setUser(info);
       await reloadData(info);
       resetNotice('登录成功');
@@ -122,8 +132,12 @@ function App() {
   async function onInitAdminSubmit(event: FormEvent): Promise<void> {
     event.preventDefault();
     try {
-      await initAdmin(initUsername, initPassword);
-      resetNotice('管理员初始化成功，请直接登录');
+      const normalizedUsername = initUsername.trim();
+      await initAdmin(normalizedUsername, initPassword);
+      setAdminInitialized(true);
+      setLoginUsername(normalizedUsername);
+      setLoginPassword(initPassword);
+      resetNotice('管理员初始化成功，请使用刚设置的账号密码登录');
     } catch (err) {
       setMessage('');
       setError((err as Error).message);
@@ -191,6 +205,8 @@ function App() {
   }
 
   if (!user) {
+    const showInitCard = adminInitialized === false;
+
     return (
       <div className="mobile-shell">
         <div className="hero">
@@ -198,20 +214,22 @@ function App() {
           <p>群聊记账 + 管理后台 + MCP 自动操作</p>
         </div>
 
-        <section className="card">
-          <h2>管理员初始化</h2>
-          <form onSubmit={onInitAdminSubmit} className="form-grid">
-            <label>
-              用户名
-              <input value={initUsername} onChange={(e) => setInitUsername(e.target.value)} />
-            </label>
-            <label>
-              密码
-              <input type="password" value={initPassword} onChange={(e) => setInitPassword(e.target.value)} />
-            </label>
-            <button type="submit">初始化管理员</button>
-          </form>
-        </section>
+        {showInitCard && (
+          <section className="card">
+            <h2>管理员初始化（仅首次）</h2>
+            <form onSubmit={onInitAdminSubmit} className="form-grid">
+              <label>
+                用户名（可自定义）
+                <input value={initUsername} onChange={(e) => setInitUsername(e.target.value)} />
+              </label>
+              <label>
+                密码
+                <input type="password" value={initPassword} onChange={(e) => setInitPassword(e.target.value)} />
+              </label>
+              <button type="submit">初始化管理员</button>
+            </form>
+          </section>
+        )}
 
         <section className="card">
           <h2>登录</h2>

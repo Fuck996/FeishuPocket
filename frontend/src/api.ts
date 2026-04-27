@@ -41,6 +41,11 @@ export async function initAdmin(username: string, password: string): Promise<voi
   });
 }
 
+export async function getSetupStatus(): Promise<{ adminInitialized: boolean }> {
+  const result = await request<{ success: true; data: { adminInitialized: boolean } }>('/api/setup-status');
+  return result.data;
+}
+
 export async function login(username: string, password: string): Promise<UserInfo> {
   const result = await request<{ success: true; token: string; user: UserInfo }>('/api/auth/login', {
     method: 'POST',

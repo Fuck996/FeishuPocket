@@ -449,9 +449,17 @@ app.get('/api/version', (_req, res) => {
   res.json({ success: true, version: '0.2.1' });
 });
 
+app.get('/api/setup-status', (_req, res) => {
+  const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
+  res.json({ success: true, data: { adminInitialized } });
+});
+
 app.post('/api/init-admin', async (req, res) => {
   const { username, password } = req.body as { username?: string; password?: string };
-  if (!username || !password) {
+  const normalizedUsername = username?.trim();
+  const normalizedPassword = password ?? '';
+
+  if (!normalizedUsername || !normalizedPassword) {
     res.status(400).json({ success: false, error: '用户名和密码必填' });
     return;
   }
@@ -464,8 +472,8 @@ app.post('/api/init-admin', async (req, res) => {
   const now = new Date().toISOString();
   const admin: UserAccount = {
     id: nanoid(),
-    username,
-    passwordHash: await hashPassword(password),
+    username: normalizedUsername,
+    passwordHash: await hashPassword(normalizedPassword),
     role: 'admin',
     childIds: [],
     createdAt: now,
@@ -481,18 +489,21 @@ app.post('/api/init-admin', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body as { username?: string; password?: string };
-  if (!username || !password) {
+  const normalizedUsername = username?.trim();
+  const normalizedPassword = password ?? '';
+
+  if (!normalizedUsername || !normalizedPassword) {
     res.status(400).json({ success: false, error: '用户名和密码必填' });
     return;
   }
 
-  const user = store.getSnapshot().users.find((item) => item.username === username);
+  const user = store.getSnapshot().users.find((item) => item.username === normalizedUsername);
   if (!user) {
     res.status(401).json({ success: false, error: '账号或密码错误' });
     return;
   }
 
-  const matched = await comparePassword(password, user.passwordHash);
+  const matched = await comparePassword(normalizedPassword, user.passwordHash);
   if (!matched) {
     res.status(401).json({ success: false, error: '账号或密码错误' });
     return;
