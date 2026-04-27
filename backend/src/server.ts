@@ -263,7 +263,12 @@ function extractMessageText(contentRaw: string, messageType?: string): string {
 }
 
 function parsePreciseBotCommand(text: string): ParsedBotAction | null {
-  const normalized = text.trim();
+  const normalized = text
+    .replace(/\u00A0/g, ' ')
+    .trim()
+    .replace(/[＋]/g, '+')
+    .replace(/[－−]/g, '-')
+    .replace(/[：]/g, ':');
 
   // 0) 帮助 / 指令 / 说明
   if (/^(帮助|指令|说明)$/.test(normalized)) {
@@ -1121,7 +1126,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.17' });
+  res.json({ success: true, version: '0.3.18' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2237,8 +2242,8 @@ async function processBotMessage(
           lines: [
             `**精确指令（格式正确即立即执行，不走 AI）**`,
             `1. 发放零花钱`,
-            `2. 余额增加：n 或 +n（中英文冒号都支持）`,
-            `3. 余额减少：n 或 -n（中英文冒号都支持）`,
+            `2. 余额增加：n，或直接输入 +n`,
+            `3. 余额减少：n，或直接输入 -n`,
             `4. 查询余额 / 余额`,
             `5. 帮助 / 指令 / 说明`,
             `\n**自然语言说明**`,
