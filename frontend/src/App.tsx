@@ -1403,8 +1403,8 @@ function App() {
               </div>
               <div className="command-guide-list">
                 <div className="command-guide-item"><strong>1. 发放零花钱</strong>：立刻发放零花钱，且下一次自动发放不再执行（可反复操作）</div>
-                <div className="command-guide-item"><strong>2. 余额增加：n</strong>：中英文冒号都支持，n 为元金额</div>
-                <div className="command-guide-item"><strong>3. 余额减少：n</strong>：中英文冒号都支持，n 为元金额</div>
+                <div className="command-guide-item"><strong>2. 余额增加：n / +n</strong>：中英文冒号都支持，n 为元金额</div>
+                <div className="command-guide-item"><strong>3. 余额减少：n / -n</strong>：中英文冒号都支持，n 为元金额</div>
                 <div className="command-guide-item"><strong>4. 查询余额 / 余额</strong>：返回最后一次余额变动卡片数据</div>
                 <div className="command-guide-item"><strong>5. 帮助 / 指令 / 说明</strong>：返回精确指令与使用说明卡片</div>
               </div>

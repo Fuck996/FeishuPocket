@@ -261,12 +261,30 @@ function parsePreciseBotCommand(text: string): ParsedBotAction | null {
     };
   }
 
+  // 2.1) +n
+  const increaseShort = normalized.match(/^\+\s*(\d+(?:\.\d+)?)$/);
+  if (increaseShort) {
+    return {
+      intent: 'increase_balance',
+      amount: Math.abs(Number(increaseShort[1]))
+    };
+  }
+
   // 3) 余额减少：n
   const decrease = normalized.match(/^余额减少\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
   if (decrease) {
     return {
       intent: 'decrease_balance',
       amount: Math.abs(Number(decrease[1]))
+    };
+  }
+
+  // 3.1) -n
+  const decreaseShort = normalized.match(/^\-\s*(\d+(?:\.\d+)?)$/);
+  if (decreaseShort) {
+    return {
+      intent: 'decrease_balance',
+      amount: Math.abs(Number(decreaseShort[1]))
     };
   }
 
@@ -1015,7 +1033,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.11' });
+  res.json({ success: true, version: '0.3.12' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -2089,8 +2107,8 @@ async function processBotMessage(
           lines: [
             `**精确指令（格式正确即立即执行，不走 AI）**`,
             `1. 发放零花钱`,
-            `2. 余额增加：n（中英文冒号都支持）`,
-            `3. 余额减少：n（中英文冒号都支持）`,
+            `2. 余额增加：n 或 +n（中英文冒号都支持）`,
+            `3. 余额减少：n 或 -n（中英文冒号都支持）`,
             `4. 查询余额 / 余额`,
             `5. 帮助 / 指令 / 说明`,
             `\n**自然语言说明**`,
