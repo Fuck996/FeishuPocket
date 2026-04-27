@@ -211,6 +211,26 @@ function parseByRegex(message: string): ParsedBotAction {
     };
   }
 
+  const rewardAmountA = cleaned.match(/([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40})\s*(?:奖励|奖?励?加|加奖|给奖励)\s*(\+?\d+(?:\.\d+)?)\s*(?:元|块)/);
+  if (rewardAmountA && !/(?:余额增加|增加余额|余额减少|减少余额|扣除|消费|花了)/.test(cleaned)) {
+    return {
+      intent: 'reward_from_message',
+      rewardKeyword: rewardAmountA[1]?.trim(),
+      reason: rewardAmountA[1]?.trim(),
+      amount: Math.abs(Number(rewardAmountA[2]))
+    };
+  }
+
+  const rewardAmountB = cleaned.match(/(?:完成|做了|达成|搞定|做完)([\u4e00-\u9fa5A-Za-z0-9_-]{1,16}).{0,6}(?:奖励|加)\s*(\+?\d+(?:\.\d+)?)\s*(?:元|块)/);
+  if (rewardAmountB) {
+    return {
+      intent: 'reward_from_message',
+      rewardKeyword: rewardAmountB[1],
+      reason: `完成${rewardAmountB[1]}`,
+      amount: Math.abs(Number(rewardAmountB[2]))
+    };
+  }
+
   const weekly = message.match(/设置.{0,10}每周.{0,4}(\d{1,2})[:：](\d{1,2})/);
   if (weekly) {
     return {
@@ -259,6 +279,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
   1) amount 单位是元，输出 number。若用户说“8块”“8元钱”，统一转成 8。
   2) deduct_expense 的 amount 始终输出正数，符号由业务层处理。
   2.1) reward_from_message 如果用户原话里明确给了奖励金额，也要返回 amount，不能省略。
+  2.2) reward_from_message 的 reason 应直接返回本次变动原因，不要要求匹配系统里已有奖励项目。
   3) 设置每周通知时，hour/minute 都必须返回，且是 0-23 / 0-59。
   4) childName 由业务层根据机器人绑定确定，不要返回 childName。
   5) 对口语化表达也要识别，例如：
@@ -268,7 +289,8 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
     - “增加5元 因为表现良好” => increase_balance
     - “减少5元 因为初始金额设置错误” => decrease_balance
     - “完成家务了” => reward_from_message
-    - “表现良好，奖励5元” => reward_from_message，且 amount=5
+    - “表现良好，奖励5元” => reward_from_message，且 amount=5, reason=表现良好
+    - “家务完成，奖励3元” => reward_from_message，且 amount=3, reason=完成家务
     - “查询余额” / “余额” => query_balance
   6) 仅当信息不足或语义冲突时返回 unknown。
 
@@ -283,6 +305,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
   示例I: "增加5元，因为表现良好" -> {"intent":"increase_balance","amount":5,"reason":"表现良好"}
   示例J: "减少5元，因为初始金额设置错误" -> {"intent":"decrease_balance","amount":5,"reason":"初始金额设置错误"}
   示例K: "表现良好，奖励5元" -> {"intent":"reward_from_message","rewardKeyword":"表现良好","amount":5,"reason":"表现良好"}
+  示例L: "家务完成，奖励3元" -> {"intent":"reward_from_message","rewardKeyword":"家务","amount":3,"reason":"完成家务"}
 
   消息: ${message}`;
 

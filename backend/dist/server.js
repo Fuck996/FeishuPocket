@@ -1032,7 +1032,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.23' });
+    res.json({ success: true, version: '0.3.24' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1927,50 +1927,12 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 break;
             }
             case 'reward_from_message': {
-                if (!targetChild || !action.rewardKeyword)
-                    throw new Error('缺少参数');
-                const child = findChildById(targetChild.id);
-                const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
-                if (!reward) {
-                    if (action.amount !== undefined) {
-                        await applyTransaction({
-                            childId: targetChild.id,
-                            amount: Math.abs(action.amount),
-                            reason: action.reason ?? action.rewardKeyword,
-                            type: 'reward',
-                            source: 'bot',
-                            actorUserId: senderOpenId,
-                            actorDisplayName: senderDisplayName,
-                            chatIdOverride: chatId
-                        });
-                        break;
-                    }
-                    const msgId = await sendRobotCard({
-                        title: '❓ 未匹配到奖励规则',
-                        lines: [
-                            `**原始消息**：${text}`,
-                            `**识别结果**：识别为奖励触发，但未找到“${action.rewardKeyword}”对应的奖励规则，且 AI 未给出可直接执行的金额。`,
-                            `**建议**：如果你的意思是直接调整余额，请直接说“增加5元，因为表现良好”或“减少5元，因为录入错误”。`
-                        ],
-                        color: 'orange'
-                    }, chatId, targetChild.id);
-                    pushBotLog({
-                        id: nanoid(),
-                        robotId: robot.id,
-                        time: new Date().toISOString(),
-                        direction: 'out',
-                        chatId,
-                        messageId: msgId,
-                        msgType: 'interactive',
-                        cardTitle: '❓ 未匹配到奖励规则',
-                        status: 'unrecognized'
-                    });
-                    return null;
-                }
+                if (!targetChild || action.amount === undefined)
+                    throw new Error('缺少奖励金额');
                 await applyTransaction({
                     childId: targetChild.id,
-                    amount: Math.abs(reward.amount),
-                    reason: action.reason ?? `完成${reward.keyword}`,
+                    amount: Math.abs(action.amount),
+                    reason: action.reason ?? action.rewardKeyword ?? 'AI识别奖励',
                     type: 'reward',
                     source: 'bot',
                     actorUserId: senderOpenId,
