@@ -28,7 +28,11 @@ function extractJsonObject(content) {
     return null;
 }
 function normalizeAction(action) {
-    if (action.intent === 'set_daily_allowance' || action.intent === 'set_reward_rule' || action.intent === 'deduct_expense') {
+    if (action.intent === 'set_daily_allowance'
+        || action.intent === 'set_reward_rule'
+        || action.intent === 'deduct_expense'
+        || action.intent === 'increase_balance'
+        || action.intent === 'decrease_balance') {
         if (action.amount !== undefined) {
             action.amount = Number(action.amount);
             if (Number.isNaN(action.amount)) {
@@ -50,6 +54,36 @@ function normalizeAction(action) {
 }
 function parseByRegex(message) {
     const cleaned = message.replace(/[，。！？；、]/g, ' ').trim();
+    const increaseA = cleaned.match(/(?:余额增加|增加|加上|加)\s*(\+?\d+(?:\.\d+)?)\s*(?:元|块)(?:\s*(?:因为|因|由于|原因|理由)\s*([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40}))?/);
+    if (increaseA) {
+        return {
+            intent: 'increase_balance',
+            amount: Math.abs(Number(increaseA[1])),
+            reason: increaseA[2]?.trim()
+        };
+    }
+    const increaseB = cleaned.match(/^(?:余额增加|增加|加上|加)\s*(\+?\d+(?:\.\d+)?)$/);
+    if (increaseB) {
+        return {
+            intent: 'increase_balance',
+            amount: Math.abs(Number(increaseB[1]))
+        };
+    }
+    const decreaseA = cleaned.match(/(?:余额减少|减少|减去|减|扣掉|扣除)\s*(\-?\d+(?:\.\d+)?)\s*(?:元|块)(?:\s*(?:因为|因|由于|原因|理由)\s*([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40}))?/);
+    if (decreaseA) {
+        return {
+            intent: 'decrease_balance',
+            amount: Math.abs(Number(decreaseA[1])),
+            reason: decreaseA[2]?.trim()
+        };
+    }
+    const decreaseB = cleaned.match(/^(?:余额减少|减少|减去|减|扣掉|扣除)\s*(\-?\d+(?:\.\d+)?)$/);
+    if (decreaseB) {
+        return {
+            intent: 'decrease_balance',
+            amount: Math.abs(Number(decreaseB[1]))
+        };
+    }
     const queryBalanceA = cleaned.match(/^(?:查询余额|查余额|余额|看余额|当前余额|现在余额)$/);
     if (queryBalanceA) {
         return { intent: 'query_balance' };
@@ -150,7 +184,7 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
         const prompt = `你是一个家庭零花钱系统指令解析器。
   请只返回 JSON 对象，不要代码块，不要额外解释。
   字段: intent, amount, rewardKeyword, reason, hour, minute。
-  intent 只允许: set_daily_allowance|set_reward_rule|deduct_expense|set_weekly_notify|reward_from_message|query_balance|unknown。
+  intent 只允许: set_daily_allowance|set_reward_rule|deduct_expense|set_weekly_notify|reward_from_message|query_balance|increase_balance|decrease_balance|unknown。
 
   识别规则:
   1) amount 单位是元，输出 number。若用户说“8块”“8元钱”，统一转成 8。
@@ -161,6 +195,8 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
     - “每天改12” => set_daily_allowance
     - “配个家务奖励5元” => set_reward_rule
     - “今天买文具花了18” => deduct_expense
+    - “增加5元 因为表现良好” => increase_balance
+    - “减少5元 因为初始金额设置错误” => decrease_balance
     - “完成家务了” => reward_from_message
       - “查询余额” / “余额” => query_balance
   6) 仅当信息不足或语义冲突时返回 unknown。
@@ -173,6 +209,8 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
   示例F: "完成了家务" -> {"intent":"reward_from_message","rewardKeyword":"家务","reason":"完成家务"}
   示例G: "查询余额" -> {"intent":"query_balance"}
   示例H: "查余额" -> {"intent":"query_balance"}
+  示例I: "增加5元，因为表现良好" -> {"intent":"increase_balance","amount":5,"reason":"表现良好"}
+  示例J: "减少5元，因为初始金额设置错误" -> {"intent":"decrease_balance","amount":5,"reason":"初始金额设置错误"}
 
   消息: ${message}`;
         const response = await fetch(endpoint, {

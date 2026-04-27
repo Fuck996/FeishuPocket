@@ -34,18 +34,20 @@ function cleanupInboundMessageDedup(now) {
         }
     }
 }
-function shouldProcessInboundMessage(messageId) {
+function isInboundMessageDuplicate(messageId) {
     if (!messageId) {
-        return true;
+        return false;
     }
     const now = Date.now();
     cleanupInboundMessageDedup(now);
     const expireAt = inboundMessageDedup.get(messageId);
-    if (expireAt && expireAt > now) {
-        return false;
+    return Boolean(expireAt && expireAt > now);
+}
+function markInboundMessageProcessed(messageId) {
+    if (!messageId) {
+        return;
     }
-    inboundMessageDedup.set(messageId, now + INBOUND_MESSAGE_DEDUP_TTL_MS);
-    return true;
+    inboundMessageDedup.set(messageId, Date.now() + INBOUND_MESSAGE_DEDUP_TTL_MS);
 }
 function getCachedFeishuUserName(openId) {
     const cached = feishuUserNameCache.get(openId);
@@ -1030,7 +1032,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.20' });
+    res.json({ success: true, version: '0.3.21' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1704,10 +1706,6 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         logIgnoredInbound('ignored_missing_message_content');
         return null;
     }
-    if (!shouldProcessInboundMessage(messageId)) {
-        logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
-        return null;
-    }
     if (messageType && messageType !== 'text' && messageType !== 'post') {
         logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
         return null;
@@ -1795,6 +1793,11 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
     if (inLog)
         inLog.intent = action.intent;
     if (action.intent === 'unknown') {
+        if (isInboundMessageDuplicate(messageId)) {
+            logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
+            return null;
+        }
+        markInboundMessageProcessed(messageId);
         if (inLog)
             inLog.status = 'unrecognized';
         // 发送识别失败反馈卡片
@@ -1822,6 +1825,11 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         catch { /* 通知失败不阻断 */ }
         return null;
     }
+    if (isInboundMessageDuplicate(messageId)) {
+        logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
+        return null;
+    }
+    markInboundMessageProcessed(messageId);
     const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
