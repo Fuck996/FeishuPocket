@@ -238,6 +238,11 @@ function extractMessageText(contentRaw: string, messageType?: string): string {
 function parsePreciseBotCommand(text: string): ParsedBotAction | null {
   const normalized = text.trim();
 
+  // 0) 帮助 / 指令 / 说明
+  if (/^(帮助|指令|说明)$/.test(normalized)) {
+    return { intent: 'show_help' };
+  }
+
   // 1) 发放零花钱（可选指定孩子）
   const manualGrant = normalized.match(/^发放零花钱(?:\s*[：:]\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12}))?$/);
   if (manualGrant) {
@@ -1010,7 +1015,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.10' });
+  res.json({ success: true, version: '0.3.11' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1897,7 +1902,7 @@ async function processBotMessage(
         title: '❓ 指令无法识别',
         lines: [
           `**原始消息**：${text}`,
-          `**提示**：支持的操作包括调整零花钱额度、设置奖励、扣除消费、修改周报时间`
+          `**提示**：支持操作包括发放零花钱、余额增减、查询余额、设置额度/奖励/周报时间；输入“帮助”可查看完整说明。`
         ],
         color: 'orange'
       }, chatId);
@@ -2065,6 +2070,36 @@ async function processBotMessage(
         if (!targetChild) throw new Error('未找到目标小孩或无权限');
         const payload = buildBalanceSnapshotCardPayload(targetChild);
         const msgId = await sendRobotCard(payload, chatId, targetChild.id);
+        pushBotLog({
+          id: nanoid(),
+          robotId: robot.id,
+          time: new Date().toISOString(),
+          direction: 'out',
+          chatId,
+          messageId: msgId,
+          msgType: 'interactive',
+          cardTitle: payload.title,
+          status: 'ok'
+        });
+        break;
+      }
+      case 'show_help': {
+        const payload: FeishuCardPayload = {
+          title: '指令说明',
+          lines: [
+            `**精确指令（格式正确即立即执行，不走 AI）**`,
+            `1. 发放零花钱`,
+            `2. 余额增加：n（中英文冒号都支持）`,
+            `3. 余额减少：n（中英文冒号都支持）`,
+            `4. 查询余额 / 余额`,
+            `5. 帮助 / 指令 / 说明`,
+            `\n**自然语言说明**`,
+            `带有消费信息或复杂描述的对话会进入 AI 识别，例如：\"扣掉5元，因为初始金额设置错误\"。`,
+            `若精确指令和 AI 都未识别，将返回“指令无法识别”的反馈。`
+          ],
+          color: 'blue'
+        };
+        const msgId = await sendRobotCard(payload, chatId, targetChild?.id);
         pushBotLog({
           id: nanoid(),
           robotId: robot.id,

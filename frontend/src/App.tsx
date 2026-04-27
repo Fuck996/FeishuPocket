@@ -1406,6 +1406,7 @@ function App() {
                 <div className="command-guide-item"><strong>2. 余额增加：n</strong>：中英文冒号都支持，n 为元金额</div>
                 <div className="command-guide-item"><strong>3. 余额减少：n</strong>：中英文冒号都支持，n 为元金额</div>
                 <div className="command-guide-item"><strong>4. 查询余额 / 余额</strong>：返回最后一次余额变动卡片数据</div>
+                <div className="command-guide-item"><strong>5. 帮助 / 指令 / 说明</strong>：返回精确指令与使用说明卡片</div>
               </div>
               <p className="field-hint">带有消费信息的自然语言（例如“扣掉5元，因为…”）会进入 AI 识别流程；精确指令优先级更高。</p>
             </section>
