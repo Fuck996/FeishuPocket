@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
+import { TimeWheelPicker } from './WheelPicker';
 import {
   adjustChild,
   createChild,
@@ -30,10 +31,9 @@ import {
   updateChild,
   updateModel,
   updatePrompt,
-  updateRobot,
-  updateSystemConfig
+  updateRobot
 } from './api';
-import { ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, SystemConfig, UserInfo, WeeklySummary } from './types';
+import { ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, UserInfo, WeeklySummary } from './types';
 
 const DEFAULT_AVATAR = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="#E2E8F0"/><circle cx="64" cy="50" r="24" fill="#94A3B8"/><rect x="26" y="84" width="76" height="30" rx="15" fill="#94A3B8"/></svg>'
@@ -57,6 +57,14 @@ interface RobotDraft {
   childIds: string[];
   controllerOpenIdsText: string;
   allowedChatIdsText: string;
+  // 飞书接入凭证（按机器人独立配置）
+  feishuMode: 'app' | 'webhook';
+  feishuAppId: string;
+  feishuAppSecret: string;
+  feishuWebhookUrl: string;
+  feishuVerificationToken: string;
+  feishuSigningSecret: string;
+  feishuDefaultChatId: string;
 }
 
 interface ChildDraft {
@@ -189,7 +197,14 @@ function createEmptyRobotDraft(): RobotDraft {
     enabled: true,
     childIds: [],
     controllerOpenIdsText: '',
-    allowedChatIdsText: ''
+    allowedChatIdsText: '',
+    feishuMode: 'app',
+    feishuAppId: '',
+    feishuAppSecret: '',
+    feishuWebhookUrl: '',
+    feishuVerificationToken: '',
+    feishuSigningSecret: '',
+    feishuDefaultChatId: ''
   };
 }
 
@@ -415,14 +430,6 @@ function App() {
 
   const [notifyHour, setNotifyHour] = useState(20);
   const [notifyMinute, setNotifyMinute] = useState(0);
-  const [feishuMode, setFeishuMode] = useState<'app' | 'webhook'>('app');
-  const [feishuWebhookUrl, setFeishuWebhookUrl] = useState('');
-  const [feishuAppId, setFeishuAppId] = useState('');
-  const [feishuAppSecret, setFeishuAppSecret] = useState('');
-  const [feishuVerificationToken, setFeishuVerificationToken] = useState('');
-  const [feishuSigningSecret, setFeishuSigningSecret] = useState('');
-  const [feishuDefaultChatId, setFeishuDefaultChatId] = useState('');
-  const [lastActiveChatId, setLastActiveChatId] = useState('');
 
   const noticeTimers = useRef<Record<number, number>>({});
 
@@ -527,14 +534,6 @@ function App() {
     setDefaultDailyAllowance(config.defaultDailyAllowance ?? 10);
     setNotifyHour(config.weeklyNotify?.hour ?? 20);
     setNotifyMinute(config.weeklyNotify?.minute ?? 0);
-    setFeishuMode(config.feishuMode ?? 'app');
-    setFeishuWebhookUrl(config.feishuWebhookUrl ?? '');
-    setFeishuAppId(config.feishuAppId ?? '');
-    setFeishuAppSecret(config.feishuAppSecret ?? '');
-    setFeishuVerificationToken(config.feishuVerificationToken ?? '');
-    setFeishuSigningSecret(config.feishuSigningSecret ?? '');
-    setFeishuDefaultChatId(config.feishuDefaultChatId ?? '');
-    setLastActiveChatId(config.lastActiveChatId ?? '');
 
     if (currentUser.role === 'admin') {
       const robotList = await getRobots();
@@ -570,7 +569,14 @@ function App() {
       enabled: robot.enabled,
       childIds: robot.childIds,
       controllerOpenIdsText: robot.controllerOpenIds.join('\n'),
-      allowedChatIdsText: robot.allowedChatIds.join('\n')
+      allowedChatIdsText: robot.allowedChatIds.join('\n'),
+      feishuMode: robot.feishuMode ?? 'app',
+      feishuAppId: robot.feishuAppId ?? '',
+      feishuAppSecret: robot.feishuAppSecret ?? '',
+      feishuWebhookUrl: robot.feishuWebhookUrl ?? '',
+      feishuVerificationToken: robot.feishuVerificationToken ?? '',
+      feishuSigningSecret: robot.feishuSigningSecret ?? '',
+      feishuDefaultChatId: robot.feishuDefaultChatId ?? ''
     });
     setRobotView({ mode: 'edit', robotId: robot.id });
   }
@@ -662,7 +668,14 @@ function App() {
       enabled: robotDraft.enabled,
       childIds: robotDraft.childIds,
       controllerOpenIds: parseTextList(robotDraft.controllerOpenIdsText),
-      allowedChatIds: parseTextList(robotDraft.allowedChatIdsText)
+      allowedChatIds: parseTextList(robotDraft.allowedChatIdsText),
+      feishuMode: robotDraft.feishuMode,
+      feishuAppId: robotDraft.feishuAppId.trim(),
+      feishuAppSecret: robotDraft.feishuAppSecret.trim(),
+      feishuWebhookUrl: robotDraft.feishuWebhookUrl.trim(),
+      feishuVerificationToken: robotDraft.feishuVerificationToken.trim(),
+      feishuSigningSecret: robotDraft.feishuSigningSecret.trim(),
+      feishuDefaultChatId: robotDraft.feishuDefaultChatId.trim()
     };
 
     try {
@@ -883,31 +896,6 @@ function App() {
       setEditingPromptId(null);
       setPromptDraft(createPromptDraft());
       await reloadData(user);
-    } catch (error) {
-      handleRequestError(error);
-    }
-  }
-
-  async function handleSaveFeishuConfig(event: FormEvent): Promise<void> {
-    event.preventDefault();
-    if (!user) {
-      return;
-    }
-
-    try {
-      const payload: Partial<SystemConfig> = {
-        feishuMode,
-        feishuWebhookUrl: feishuWebhookUrl.trim(),
-        feishuAppId: feishuAppId.trim(),
-        feishuAppSecret: feishuAppSecret.trim(),
-        feishuVerificationToken: feishuVerificationToken.trim(),
-        feishuSigningSecret: feishuSigningSecret.trim(),
-        feishuDefaultChatId: feishuDefaultChatId.trim()
-      };
-
-      await updateSystemConfig(payload);
-      await reloadData(user);
-      showNotice('飞书配置已保存');
     } catch (error) {
       handleRequestError(error);
     }
@@ -1376,74 +1364,6 @@ function App() {
             <section className="panel-card">
               <div className="panel-card__header">
                 <div>
-                  <p className="section-eyebrow">飞书机器人设置</p>
-                  <h2>接入凭证与回调配置</h2>
-                </div>
-              </div>
-              <form className="form-grid" onSubmit={handleSaveFeishuConfig}>
-                <label>
-                  飞书接入方式
-                  <select value={feishuMode} onChange={(event) => setFeishuMode(event.target.value as 'app' | 'webhook')}>
-                    <option value="app">自建应用事件订阅（推荐）</option>
-                    <option value="webhook">群 webhook</option>
-                  </select>
-                  <span className="field-hint">推荐「自建应用事件订阅」，可同时接收单聊和群聊消息；「群 webhook」仅支持群消息推送</span>
-                </label>
-
-                <div className="form-row">
-                  <label>
-                    飞书 App ID
-                    <input value={feishuAppId} onChange={(event) => setFeishuAppId(event.target.value)} placeholder="cli_xxxxxxxxxxxxxxxxxx" />
-                    <span className="field-hint">飞书开放平台 → 应用详情 → 凭证与基础信息 → App ID</span>
-                  </label>
-                  <label>
-                    飞书 App Secret
-                    <input type="password" value={feishuAppSecret} onChange={(event) => setFeishuAppSecret(event.target.value)} placeholder="••••••••" />
-                    <span className="field-hint">同页面的 App Secret，切勿泄露</span>
-                  </label>
-                </div>
-
-                <div className="form-row">
-                  <label>
-                    Verification Token
-                    <input value={feishuVerificationToken} onChange={(event) => setFeishuVerificationToken(event.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxx" />
-                    <span className="field-hint">开放平台 → 事件订阅 → 加密策略 → Verification Token</span>
-                  </label>
-                  <label>
-                    Signing Secret
-                    <input type="password" value={feishuSigningSecret} onChange={(event) => setFeishuSigningSecret(event.target.value)} placeholder="••••••••" />
-                    <span className="field-hint">同页面的 Encrypt Key / Signing Secret</span>
-                  </label>
-                </div>
-
-                <label>
-                  默认通知 Chat ID
-                  <input value={feishuDefaultChatId} onChange={(event) => setFeishuDefaultChatId(event.target.value)} placeholder="oc_xxxxxxxxxxxxxxxxxxxxxxxx" />
-                  <span className="field-hint">机器人主动推送消息的目标群 Chat ID（oc_xxx）。在群内发任意消息后，下方「最近活跃 Chat ID」会自动更新</span>
-                </label>
-
-                {feishuMode === 'webhook' && (
-                  <label>
-                    群 webhook 地址
-                    <input value={feishuWebhookUrl} onChange={(event) => setFeishuWebhookUrl(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
-                    <span className="field-hint">仅 webhook 模式需要，在飞书群设置 → 机器人 → 添加机器人中获取</span>
-                  </label>
-                )}
-
-                {lastActiveChatId ? (
-                  <label>
-                    最近活跃 Chat ID（只读）
-                    <input value={lastActiveChatId} readOnly />
-                  </label>
-                ) : null}
-
-                <button type="submit">保存飞书配置</button>
-              </form>
-            </section>
-
-            <section className="panel-card">
-              <div className="panel-card__header">
-                <div>
                   <p className="section-eyebrow">周报通知</p>
                   <h2>每周统计发送时间</h2>
                 </div>
@@ -1462,7 +1382,7 @@ function App() {
                       }
                     }}
                   />
-                  <span className="field-hint">每周一该时间点自动向默认 Chat ID 发送上周零花钱统计汇总</span>
+                  <span className="field-hint">每周一该时间点自动向对应机器人默认 Chat ID 发送上周零花钱统计汇总</span>
                 </label>
                 <button type="submit">保存通知时间</button>
               </form>
@@ -1553,6 +1473,74 @@ function App() {
               <button type="submit">保存机器人</button>
               {robotView.mode === 'edit' && <button type="button" className="danger-button" onClick={handleRobotDelete}>删除机器人</button>}
             </div>
+          </form>
+        </section>
+
+        <section className="panel-card">
+          <div className="panel-card__header">
+            <div>
+              <p className="section-eyebrow">飞书接入凭证</p>
+              <h2>回调配置（仅本机器人）</h2>
+            </div>
+          </div>
+          <form className="form-grid" onSubmit={handleRobotSave}>
+            <label>
+              飞书接入方式
+              <select value={robotDraft.feishuMode} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuMode: event.target.value as 'app' | 'webhook' }))}>
+                <option value="app">自建应用事件订阅（推荐）</option>
+                <option value="webhook">群 webhook</option>
+              </select>
+              <span className="field-hint">推荐「自建应用事件订阅」，可同时接收单聊和群聊消息；「群 webhook」仅支持群消息推送</span>
+            </label>
+
+            <div className="form-row">
+              <label>
+                飞书 App ID
+                <input value={robotDraft.feishuAppId} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuAppId: event.target.value }))} placeholder="cli_xxxxxxxxxxxxxxxxxx" />
+                <span className="field-hint">飞书开放平台 → 凭证与基础信息 → App ID</span>
+              </label>
+              <label>
+                飞书 App Secret
+                <input type="password" value={robotDraft.feishuAppSecret} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuAppSecret: event.target.value }))} placeholder="••••••••" />
+                <span className="field-hint">同页面的 App Secret，切勿泄露</span>
+              </label>
+            </div>
+
+            <div className="form-row">
+              <label>
+                Verification Token
+                <input value={robotDraft.feishuVerificationToken} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuVerificationToken: event.target.value }))} placeholder="xxxxxxxxxxxxxxxxxxxxxxxx" />
+                <span className="field-hint">开放平台 → 事件订阅 → 加密策略 → Verification Token</span>
+              </label>
+              <label>
+                Signing Secret
+                <input type="password" value={robotDraft.feishuSigningSecret} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuSigningSecret: event.target.value }))} placeholder="••••••••" />
+                <span className="field-hint">同页面的 Encrypt Key / Signing Secret</span>
+              </label>
+            </div>
+
+            <label>
+              默认通知 Chat ID
+              <input value={robotDraft.feishuDefaultChatId} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuDefaultChatId: event.target.value }))} placeholder="oc_xxxxxxxxxxxxxxxxxxxxxxxx" />
+              <span className="field-hint">机器人主动推送消息的目标群 Chat ID（oc_xxx）。在群内发任意消息后会自动更新</span>
+            </label>
+
+            {robotDraft.feishuMode === 'webhook' && (
+              <label>
+                群 webhook 地址
+                <input value={robotDraft.feishuWebhookUrl} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuWebhookUrl: event.target.value }))} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+                <span className="field-hint">仅 webhook 模式需要，在飞书群设置 → 机器人 → 添加机器人中获取</span>
+              </label>
+            )}
+
+            {robotView.mode === 'edit' && selectedRobot?.lastActiveChatId && (
+              <label>
+                最近活跃 Chat ID（只读）
+                <input value={selectedRobot.lastActiveChatId} readOnly />
+              </label>
+            )}
+
+            <button type="submit">保存凭证配置</button>
           </form>
         </section>
       </div>
@@ -1663,13 +1651,14 @@ function App() {
 
             <div className="form-row">
               <label>
-                每日发放时 (0-23)
-                <input type="number" min={0} max={23} step={1} value={childDraft.dailyGrantHour} onChange={(event) => setChildDraft((current) => ({ ...current, dailyGrantHour: Number(event.target.value) }))} />
-              </label>
-              <label>
-                每日发放分 (0-59)
-                <input type="number" min={0} max={59} step={1} value={childDraft.dailyGrantMinute} onChange={(event) => setChildDraft((current) => ({ ...current, dailyGrantMinute: Number(event.target.value) }))} />
-                <span className="field-hint">零花钱每天在此时刻自动发放，精确到分钟</span>
+                每日发放时刻
+                <span className="field-hint">零花钱每天在此时刻自动发放</span>
+                <TimeWheelPicker
+                  hour={childDraft.dailyGrantHour}
+                  minute={childDraft.dailyGrantMinute}
+                  onHourChange={(h) => setChildDraft((current) => ({ ...current, dailyGrantHour: h }))}
+                  onMinuteChange={(m) => setChildDraft((current) => ({ ...current, dailyGrantMinute: m }))}
+                />
               </label>
             </div>
 

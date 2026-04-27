@@ -38,6 +38,15 @@ export interface RobotConfig {
   childIds: string[];
   controllerOpenIds: string[];
   allowedChatIds: string[];
+  // 飞书接入凭证（按机器人配置）
+  feishuMode?: 'app' | 'webhook';
+  feishuWebhookUrl?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuVerificationToken?: string;
+  feishuSigningSecret?: string;
+  feishuDefaultChatId?: string;
+  lastActiveChatId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -78,15 +87,6 @@ export interface SystemConfig {
   defaultDailyAllowance: number;
   lastDailyGrantDate?: string;
   lastDailyGrantTimes?: Record<string, string>; // childId → 最近一次发放日期 "YYYY-MM-DD"
-  // 飞书机器人配置（支持自建应用机器人与群 webhook 两种模式）
-  feishuMode?: 'app' | 'webhook';
-  feishuWebhookUrl?: string;
-  feishuAppId?: string;
-  feishuAppSecret?: string;
-  feishuVerificationToken?: string;
-  feishuSigningSecret?: string;
-  feishuDefaultChatId?: string;
-  lastActiveChatId?: string;
   builtInPromptVersion?: string;
 }
 

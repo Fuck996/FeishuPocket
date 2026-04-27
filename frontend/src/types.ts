@@ -47,6 +47,15 @@ export interface RobotConfig {
   childIds: string[];
   controllerOpenIds: string[];
   allowedChatIds: string[];
+  // 飞书接入凭证（按机器人配置）
+  feishuMode?: 'app' | 'webhook';
+  feishuWebhookUrl?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuVerificationToken?: string;
+  feishuSigningSecret?: string;
+  feishuDefaultChatId?: string;
+  lastActiveChatId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -58,14 +67,6 @@ export interface SystemConfig {
   };
   ignoreBotUserIds: string[];
   defaultDailyAllowance: number;
-  feishuMode?: 'app' | 'webhook';
-  feishuWebhookUrl?: string;
-  feishuAppId?: string;
-  feishuAppSecret?: string;
-  feishuVerificationToken?: string;
-  feishuSigningSecret?: string;
-  feishuDefaultChatId?: string;
-  lastActiveChatId?: string;
 }
 
 export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';

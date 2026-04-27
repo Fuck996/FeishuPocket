@@ -57,7 +57,6 @@ const DEFAULT_STORE = {
         weeklyNotify: { hour: 20, minute: 0 },
         ignoreBotUserIds: [],
         defaultDailyAllowance: 10,
-        feishuMode: 'app',
         builtInPromptVersion: BUILT_IN_PROMPT_VERSION
     }
 };
@@ -83,7 +82,24 @@ export class JsonStore {
         this.data = {
             users: parsed.users ?? [],
             children: parsed.children ?? [],
-            robots: parsed.robots ?? [],
+            robots: (parsed.robots ?? []).map((r) => ({
+                id: r.id,
+                name: r.name,
+                enabled: r.enabled ?? true,
+                childIds: r.childIds ?? [],
+                controllerOpenIds: r.controllerOpenIds ?? [],
+                allowedChatIds: r.allowedChatIds ?? [],
+                feishuMode: r.feishuMode,
+                feishuWebhookUrl: r.feishuWebhookUrl,
+                feishuAppId: r.feishuAppId,
+                feishuAppSecret: r.feishuAppSecret,
+                feishuVerificationToken: r.feishuVerificationToken,
+                feishuSigningSecret: r.feishuSigningSecret,
+                feishuDefaultChatId: r.feishuDefaultChatId,
+                lastActiveChatId: r.lastActiveChatId,
+                createdAt: r.createdAt,
+                updatedAt: r.updatedAt
+            })),
             transactions: parsed.transactions ?? [],
             weeklySummaries: parsed.weeklySummaries ?? [],
             models: parsed.models ?? [],
@@ -94,17 +110,24 @@ export class JsonStore {
                 defaultDailyAllowance: parsed.config?.defaultDailyAllowance ?? 10,
                 lastDailyGrantDate: parsed.config?.lastDailyGrantDate,
                 lastDailyGrantTimes: parsed.config?.lastDailyGrantTimes ?? {},
-                feishuMode: parsed.config?.feishuMode ?? 'app',
-                feishuWebhookUrl: parsed.config?.feishuWebhookUrl,
-                feishuAppId: parsed.config?.feishuAppId,
-                feishuAppSecret: parsed.config?.feishuAppSecret,
-                feishuVerificationToken: parsed.config?.feishuVerificationToken,
-                feishuSigningSecret: parsed.config?.feishuSigningSecret,
-                feishuDefaultChatId: parsed.config?.feishuDefaultChatId,
-                lastActiveChatId: parsed.config?.lastActiveChatId,
                 builtInPromptVersion: parsed.config?.builtInPromptVersion
             }
         };
+        // 兼容旧版本迁移：将全局飞书配置迁移到第一个机器人
+        const oldCfg = parsed.config;
+        if (oldCfg?.feishuAppId || oldCfg?.feishuWebhookUrl) {
+            const firstRobot = this.data.robots[0];
+            if (firstRobot && !firstRobot.feishuAppId && !firstRobot.feishuWebhookUrl) {
+                firstRobot.feishuMode = oldCfg.feishuMode ?? 'app';
+                firstRobot.feishuAppId = oldCfg.feishuAppId;
+                firstRobot.feishuAppSecret = oldCfg.feishuAppSecret;
+                firstRobot.feishuWebhookUrl = oldCfg.feishuWebhookUrl;
+                firstRobot.feishuVerificationToken = oldCfg.feishuVerificationToken;
+                firstRobot.feishuSigningSecret = oldCfg.feishuSigningSecret;
+                firstRobot.feishuDefaultChatId = oldCfg.feishuDefaultChatId;
+                firstRobot.lastActiveChatId = oldCfg.lastActiveChatId;
+            }
+        }
         // 增量补齐内置模型与提示词，避免破坏已有用户数据。
         const changed = this.ensureBuiltInItems();
         if (changed) {
