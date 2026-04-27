@@ -1008,7 +1008,8 @@ async function applyTransaction(input: {
   const currentBalance = updatedChild?.balance ?? child.balance;
   const { date, time } = formatDateTimeCn(transaction.createdAt);
   const avatarUrl = resolveAvatarForFeishu(child);
-  const avatarKey = await ensureChildFeishuAvatarKey(child);
+  // 发卡前若已有 img_key，直接复用，不再重复上传。
+  const avatarKey = child.feishuAvatarKey ?? await ensureChildFeishuAvatarKey(child);
 
   const payload: FeishuCardPayload = {
     title: '零花钱金额变动通知',
@@ -1477,7 +1478,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.31' });
+  res.json({ success: true, version: '0.3.32' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
