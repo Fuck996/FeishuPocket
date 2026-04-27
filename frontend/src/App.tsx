@@ -11,6 +11,7 @@ import {
   deleteModel,
   deletePrompt,
   getChildren,
+  getConfig,
   getModels,
   getOperators,
   getPrompts,
@@ -24,11 +25,12 @@ import {
   setDailyAllowance,
   setRewardRule,
   setWeeklyNotify,
+  updateSystemConfig,
   updateOperator,
   updateModel,
   updatePrompt
 } from './api';
-import { ChildProfile, ModelConfig, OperatorUser, PromptTemplate, UserInfo, WeeklySummary } from './types';
+import { ChildProfile, ModelConfig, OperatorUser, PromptTemplate, SystemConfig, UserInfo, WeeklySummary } from './types';
 
 const DEFAULT_AVATAR = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="#E2E8F0"/><circle cx="64" cy="50" r="24" fill="#94A3B8"/><rect x="26" y="84" width="76" height="30" rx="15" fill="#94A3B8"/></svg>'
@@ -76,6 +78,14 @@ function App() {
   const [bindFeishuId, setBindFeishuId] = useState('');
   const [notifyHour, setNotifyHour] = useState(20);
   const [notifyMinute, setNotifyMinute] = useState(0);
+  const [feishuMode, setFeishuMode] = useState<'app' | 'webhook'>('app');
+  const [feishuWebhookUrl, setFeishuWebhookUrl] = useState('');
+  const [feishuAppId, setFeishuAppId] = useState('');
+  const [feishuAppSecret, setFeishuAppSecret] = useState('');
+  const [feishuVerificationToken, setFeishuVerificationToken] = useState('');
+  const [feishuSigningSecret, setFeishuSigningSecret] = useState('');
+  const [feishuDefaultChatId, setFeishuDefaultChatId] = useState('');
+  const [lastActiveChatId, setLastActiveChatId] = useState('');
 
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
@@ -96,18 +106,29 @@ function App() {
   }, [children]);
 
   async function reloadData(currentUser: UserInfo): Promise<void> {
-    const [childList, txList, weeklyList, modelList, promptList] = await Promise.all([
+    const [childList, txList, weeklyList, modelList, promptList, config] = await Promise.all([
       getChildren(),
       getTransactions(),
       getWeeklySummaries(),
       getModels(),
-      getPrompts()
+      getPrompts(),
+      getConfig()
     ]);
     setChildren(childList);
     setTransactions(txList);
     setSummaries(weeklyList);
     setModels(modelList);
     setPrompts(promptList);
+    setNotifyHour(config.weeklyNotify?.hour ?? 20);
+    setNotifyMinute(config.weeklyNotify?.minute ?? 0);
+    setFeishuMode(config.feishuMode ?? 'app');
+    setFeishuWebhookUrl(config.feishuWebhookUrl ?? '');
+    setFeishuAppId(config.feishuAppId ?? '');
+    setFeishuAppSecret(config.feishuAppSecret ?? '');
+    setFeishuVerificationToken(config.feishuVerificationToken ?? '');
+    setFeishuSigningSecret(config.feishuSigningSecret ?? '');
+    setFeishuDefaultChatId(config.feishuDefaultChatId ?? '');
+    setLastActiveChatId(config.lastActiveChatId ?? '');
     if (currentUser.role === 'admin') {
       const operatorList = await getOperators();
       setOperators(operatorList);
@@ -246,6 +267,26 @@ function App() {
     try {
       await setWeeklyNotify(notifyHour, notifyMinute);
       resetNotice('每周统计通知时间已更新');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function onSaveFeishuBotConfig(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    try {
+      const payload: Partial<SystemConfig> = {
+        feishuMode,
+        feishuWebhookUrl: feishuWebhookUrl.trim(),
+        feishuAppId: feishuAppId.trim(),
+        feishuAppSecret: feishuAppSecret.trim(),
+        feishuVerificationToken: feishuVerificationToken.trim(),
+        feishuSigningSecret: feishuSigningSecret.trim(),
+        feishuDefaultChatId: feishuDefaultChatId.trim()
+      };
+      await updateSystemConfig(payload);
+      await reloadData(user as UserInfo);
+      resetNotice('飞书机器人配置已保存');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -469,6 +510,50 @@ function App() {
       {activeTab === 'settings' && (
       <section className="card">
         <h2>系统配置</h2>
+        {user.role === 'admin' && (
+          <form onSubmit={onSaveFeishuBotConfig} className="form-grid">
+            <label>
+              飞书机器人实现方式
+              <select value={feishuMode} onChange={(e) => setFeishuMode(e.target.value as 'app' | 'webhook')}>
+                <option value="app">自建应用事件订阅机器人（推荐）</option>
+                <option value="webhook">群 webhook 机器人（兼容）</option>
+              </select>
+            </label>
+
+            <label>
+              飞书 App ID（自建应用）
+              <input value={feishuAppId} onChange={(e) => setFeishuAppId(e.target.value)} placeholder="cli_xxx" />
+            </label>
+            <label>
+              飞书 App Secret（自建应用）
+              <input type="password" value={feishuAppSecret} onChange={(e) => setFeishuAppSecret(e.target.value)} placeholder="应用凭证" />
+            </label>
+            <label>
+              事件订阅 Verification Token
+              <input value={feishuVerificationToken} onChange={(e) => setFeishuVerificationToken(e.target.value)} placeholder="可选，建议配置" />
+            </label>
+            <label>
+              事件订阅 Signing Secret
+              <input type="password" value={feishuSigningSecret} onChange={(e) => setFeishuSigningSecret(e.target.value)} placeholder="可选，建议配置" />
+            </label>
+            <label>
+              默认发送 Chat ID
+              <input value={feishuDefaultChatId} onChange={(e) => setFeishuDefaultChatId(e.target.value)} placeholder="oc_xxx（群或会话ID）" />
+            </label>
+            <label>
+              当前最近活跃 Chat ID（只读）
+              <input value={lastActiveChatId} readOnly />
+            </label>
+            <label>
+              兼容 webhook 地址（可选）
+              <input value={feishuWebhookUrl} onChange={(e) => setFeishuWebhookUrl(e.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+            </label>
+
+            <button type="submit">保存飞书机器人配置</button>
+            <p>事件订阅回调地址：/api/feishu/events（兼容 /api/feishu/webhook）</p>
+          </form>
+        )}
+
         <form onSubmit={onBindFeishu} className="form-grid">
           <label>
             当前账号绑定飞书OpenID

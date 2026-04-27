@@ -36,6 +36,23 @@ export interface OperatorUser {
   boundFeishuUserId?: string;
 }
 
+export interface SystemConfig {
+  weeklyNotify: {
+    hour: number;
+    minute: number;
+  };
+  ignoreBotUserIds: string[];
+  defaultDailyAllowance: number;
+  feishuMode?: 'app' | 'webhook';
+  feishuWebhookUrl?: string;
+  feishuAppId?: string;
+  feishuAppSecret?: string;
+  feishuVerificationToken?: string;
+  feishuSigningSecret?: string;
+  feishuDefaultChatId?: string;
+  lastActiveChatId?: string;
+}
+
 export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';
 
 export interface ModelConfig {

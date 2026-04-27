@@ -115,15 +115,13 @@ docker compose up -d
 
 ## 飞书侧操作
 ### 1. 创建并配置飞书群机器人
-1. 在目标群聊中添加自定义机器人。
-2. 记录机器人的 Webhook 地址。
-3. 管理员登录后台后，在系统配置中保存该 Webhook。
-4. 在飞书开放平台配置事件订阅回调地址：
-  - 回调 URL：`http://你的服务地址/api/feishu/webhook`
-  - 开启群消息事件（文本消息）
-5. 安全配置（推荐开启）：
-  - `FEISHU_VERIFICATION_TOKEN`：事件订阅 Verification Token
-  - `FEISHU_SIGNING_SECRET`：事件订阅 Signing Secret
+1. 推荐使用“飞书自建应用机器人（事件订阅）”，不要依赖群 webhook 机器人来接收消息。
+2. 在飞书开放平台创建自建应用，开启机器人能力与消息事件订阅。
+3. 配置事件订阅回调地址：
+  - 回调 URL：`http://你的服务地址/api/feishu/events`
+  - 兼容 URL：`http://你的服务地址/api/feishu/webhook`
+4. 在后台“系统配置”中保存：`App ID`、`App Secret`、`Verification Token`、`Signing Secret`、默认 `Chat ID`。
+5. 若仍有历史 webhook 场景，可在系统配置中切换到 webhook 兼容模式。
 
 ### 2. 初始化与账号绑定
 1. 首次访问时先初始化管理员（仅一次，可自定义管理员用户名）。
@@ -132,6 +130,7 @@ docker compose up -d
 4. 小孩头像采用“文件上传”（可选），未上传时系统显示默认头像。
 5. 每个用户在后台绑定自己的飞书 OpenID。
 6. 管理员可在“操作用户管理”中维护操作员的飞书 OpenID。
+7. 控制账号与小孩绑定后，控制账号在“单聊”或“群聊”发言都可触发机器人操作。
 
 ### 3. 群聊支持语句
 1. 调整每日额度：`设置小明每日零花钱 12 元`
@@ -148,4 +147,4 @@ docker compose up -d
 ### 5. 消息过滤策略
 1. 自动忽略 `sender_type = bot` 的消息。
 2. 自动忽略系统配置 `ignoreBotUserIds` 中的发送者。
-3. 自动忽略未绑定飞书账号的发送者。
+3. 自动忽略未绑定飞书账号的发送者（即未绑定控制账号）。

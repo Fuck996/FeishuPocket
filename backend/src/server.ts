@@ -22,6 +22,14 @@ type AuthedRequest = Request & {
   rawBody?: string;
 };
 
+type FeishuSendTarget = {
+  mode: 'app' | 'webhook';
+  webhookUrl?: string;
+  appId?: string;
+  appSecret?: string;
+  chatId?: string;
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -93,7 +101,7 @@ function safeEqual(left: string, right: string): boolean {
 }
 
 function verifyFeishuToken(body: unknown): boolean {
-  const verifyToken = process.env.FEISHU_VERIFICATION_TOKEN;
+  const verifyToken = store.getSnapshot().config.feishuVerificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN;
   if (!verifyToken) {
     return true;
   }
@@ -107,7 +115,7 @@ function verifyFeishuToken(body: unknown): boolean {
 }
 
 function verifyFeishuSignature(req: AuthedRequest): boolean {
-  const secret = process.env.FEISHU_SIGNING_SECRET;
+  const secret = store.getSnapshot().config.feishuSigningSecret ?? process.env.FEISHU_SIGNING_SECRET;
   if (!secret) {
     return true;
   }
@@ -134,6 +142,7 @@ function extractFeishuEvent(reqBody: unknown): {
   senderType?: string;
   messageType?: string;
   contentRaw?: string;
+  chatId?: string;
 } {
   const body = reqBody as Record<string, unknown>;
   const event = (body.event as Record<string, unknown> | undefined) ?? body;
@@ -149,6 +158,7 @@ function extractFeishuEvent(reqBody: unknown): {
 
   const senderType = (sender.sender_type as string | undefined) ?? (sender.type as string | undefined);
   const messageType = (message.message_type as string | undefined) ?? (message.type as string | undefined);
+  const chatId = (message.chat_id as string | undefined) ?? ((event.chat as Record<string, unknown> | undefined)?.chat_id as string | undefined);
   const contentField = message.content;
 
   let contentRaw: string | undefined;
@@ -164,8 +174,34 @@ function extractFeishuEvent(reqBody: unknown): {
     senderOpenId,
     senderType,
     messageType,
-    contentRaw
+    contentRaw,
+    chatId
   };
+}
+
+function resolveFeishuSendTarget(chatIdOverride?: string): FeishuSendTarget {
+  const config = store.getSnapshot().config;
+  const mode = config.feishuMode ?? 'app';
+  const resolvedChatId = chatIdOverride ?? config.feishuDefaultChatId ?? config.lastActiveChatId;
+
+  if (mode === 'webhook') {
+    return {
+      mode,
+      webhookUrl: config.feishuWebhookUrl
+    };
+  }
+
+  return {
+    mode,
+    appId: config.feishuAppId,
+    appSecret: config.feishuAppSecret,
+    chatId: resolvedChatId,
+    webhookUrl: config.feishuWebhookUrl
+  };
+}
+
+async function sendRobotCard(payload: { title: string; lines: string[] }, chatIdOverride?: string): Promise<void> {
+  await sendFeishuCard(resolveFeishuSendTarget(chatIdOverride), payload);
 }
 
 function sanitizeUser(user: UserAccount) {
@@ -367,8 +403,7 @@ async function applyTransaction(input: {
   });
 
   // 从数据库读取飞书 webhook，而非环境变量
-  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-  await sendFeishuCard(webhookUrl, {
+  await sendRobotCard({
     title: '零花钱金额变动通知',
     lines: [
       `**对象**：${child.name}`,
@@ -494,8 +529,7 @@ async function runWeeklySummary(): Promise<void> {
       draft.weeklySummaries.push(summary);
     });
 
-    const summaryWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-    await sendFeishuCard(summaryWebhookUrl, {
+    await sendRobotCard({
       title: `${child.name}上周零花钱统计`,
       lines: [
         `**统计周期**：${range.startText} ~ ${range.endText}`,
@@ -800,8 +834,7 @@ app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async 
 
   const child = findChildById(childId);
   // 从数据库读取飞书 webhook，而非环境变量
-  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-  await sendFeishuCard(webhookUrl, {
+  await sendRobotCard({
     title: '系统操作反馈：每日零花钱额度',
     lines: [
       `**识别结果**：成功`,
@@ -839,8 +872,7 @@ app.put('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req
 
   const child = findChildById(childId);
   // 从数据库读取飞书 webhook，而非环境变量
-  const webhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-  await sendFeishuCard(webhookUrl, {
+  await sendRobotCard({
     title: '系统操作反馈：额外奖励规则',
     lines: [
       `**识别结果**：成功`,
@@ -867,8 +899,7 @@ app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (r
   scheduler.updateWeeklySchedule(Number(hour), Number(minute));
 
   // 从数据库读取飞书 webhook，而非环境变量
-  const notifyWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-  await sendFeishuCard(notifyWebhookUrl, {
+  await sendRobotCard({
     title: '系统操作反馈：每周统计通知',
     lines: [
       `**识别结果**：成功`,
@@ -888,11 +919,45 @@ app.get('/api/config', requireAuth, (_req, res) => {
  * 由管理员在 UI 中配置系统级参数
  */
 app.put('/api/config/system', requireAuth, requireRole('admin'), (req: AuthedRequest, res) => {
-  const { feishuWebhookUrl } = req.body as { feishuWebhookUrl?: string };
+  const {
+    feishuMode,
+    feishuWebhookUrl,
+    feishuAppId,
+    feishuAppSecret,
+    feishuVerificationToken,
+    feishuSigningSecret,
+    feishuDefaultChatId
+  } = req.body as {
+    feishuMode?: 'app' | 'webhook';
+    feishuWebhookUrl?: string;
+    feishuAppId?: string;
+    feishuAppSecret?: string;
+    feishuVerificationToken?: string;
+    feishuSigningSecret?: string;
+    feishuDefaultChatId?: string;
+  };
 
   store.update((draft) => {
+    if (feishuMode !== undefined) {
+      draft.config.feishuMode = feishuMode;
+    }
     if (feishuWebhookUrl !== undefined) {
       draft.config.feishuWebhookUrl = feishuWebhookUrl;
+    }
+    if (feishuAppId !== undefined) {
+      draft.config.feishuAppId = feishuAppId;
+    }
+    if (feishuAppSecret !== undefined) {
+      draft.config.feishuAppSecret = feishuAppSecret;
+    }
+    if (feishuVerificationToken !== undefined) {
+      draft.config.feishuVerificationToken = feishuVerificationToken;
+    }
+    if (feishuSigningSecret !== undefined) {
+      draft.config.feishuSigningSecret = feishuSigningSecret;
+    }
+    if (feishuDefaultChatId !== undefined) {
+      draft.config.feishuDefaultChatId = feishuDefaultChatId;
     }
   });
 
@@ -917,7 +982,7 @@ app.get('/api/weekly-summaries', requireAuth, (req: AuthedRequest, res) => {
   res.json({ success: true, data: list.slice(-50).reverse() });
 });
 
-app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
+app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedRequest, res) => {
   if (!verifyFeishuToken(req.body)) {
     res.status(401).json({ success: false, error: '飞书 token 校验失败' });
     return;
@@ -934,7 +999,13 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
     return;
   }
 
-  const { senderOpenId, senderType, messageType, contentRaw } = extractFeishuEvent(req.body);
+  const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+
+  if (chatId) {
+    store.update((draft) => {
+      draft.config.lastActiveChatId = chatId;
+    });
+  }
 
   const eventType = body?.header?.event_type;
   if (eventType && eventType !== 'im.message.receive_v1') {
@@ -1002,15 +1073,14 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         child.dailyAllowance = action.amount as number;
         child.updatedAt = new Date().toISOString();
       });
-      const dailyAllowanceWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-      await sendFeishuCard(dailyAllowanceWebhookUrl, {
+      await sendRobotCard({
         title: '系统操作反馈：每日额度调整',
         lines: [
           `**识别结果**：成功`,
           `**对象**：${targetChild.name}`,
           `**每日零花钱总金额**：${amountYuan(action.amount as number)}`
         ]
-      });
+      }, chatId);
       break;
     }
     case 'set_reward_rule': {
@@ -1036,8 +1106,7 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
         child.rewardRules.push(rule);
       });
-      const rewardWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-      await sendFeishuCard(rewardWebhookUrl, {
+      await sendRobotCard({
         title: '系统操作反馈：额外奖励设置',
         lines: [
           `**识别结果**：成功`,
@@ -1045,7 +1114,7 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
           `**奖励项目**：${action.rewardKeyword}`,
           `**奖励金额**：${amountYuan(action.amount)}`
         ]
-      });
+      }, chatId);
       break;
     }
     case 'deduct_expense': {
@@ -1080,14 +1149,13 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
         };
       });
       scheduler.updateWeeklySchedule(action.hour, action.minute);
-      const weeklyNotifyWebhookUrl = store.getSnapshot().config.feishuWebhookUrl;
-      await sendFeishuCard(weeklyNotifyWebhookUrl, {
+      await sendRobotCard({
         title: '系统操作反馈：每周统计通知',
         lines: [
           `**识别结果**：成功`,
           `**通知时间**：每周一 ${String(action.hour).padStart(2, '0')}:${String(action.minute).padStart(2, '0')}`
         ]
-      });
+      }, chatId);
       break;
     }
     case 'reward_from_message': {

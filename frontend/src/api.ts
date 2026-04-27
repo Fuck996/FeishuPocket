@@ -1,4 +1,4 @@
-import { ChildProfile, OperatorUser, UserInfo, WeeklySummary, ModelConfig, PromptTemplate } from './types';
+import { ChildProfile, OperatorUser, UserInfo, WeeklySummary, ModelConfig, PromptTemplate, SystemConfig } from './types';
 
 const TOKEN_KEY = 'fp_token';
 
@@ -108,6 +108,18 @@ export async function setWeeklyNotify(hour: number, minute: number): Promise<voi
   await request('/api/config/weekly-notify', {
     method: 'PUT',
     body: JSON.stringify({ hour, minute })
+  });
+}
+
+export async function getConfig(): Promise<SystemConfig> {
+  const result = await request<{ success: true; data: SystemConfig }>('/api/config');
+  return result.data;
+}
+
+export async function updateSystemConfig(payload: Partial<SystemConfig>): Promise<void> {
+  await request('/api/config/system', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
   });
 }
 

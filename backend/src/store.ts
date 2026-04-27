@@ -59,7 +59,8 @@ const DEFAULT_STORE: AppStore = {
   config: {
     weeklyNotify: { hour: 20, minute: 0 },
     ignoreBotUserIds: [],
-    defaultDailyAllowance: 10
+    defaultDailyAllowance: 10,
+    feishuMode: 'app'
   }
 };
 
@@ -97,7 +98,15 @@ export class JsonStore {
         weeklyNotify: parsed.config?.weeklyNotify ?? { hour: 20, minute: 0 },
         ignoreBotUserIds: parsed.config?.ignoreBotUserIds ?? [],
         defaultDailyAllowance: parsed.config?.defaultDailyAllowance ?? 10,
-        lastDailyGrantDate: parsed.config?.lastDailyGrantDate
+        lastDailyGrantDate: parsed.config?.lastDailyGrantDate,
+        feishuMode: parsed.config?.feishuMode ?? 'app',
+        feishuWebhookUrl: parsed.config?.feishuWebhookUrl,
+        feishuAppId: parsed.config?.feishuAppId,
+        feishuAppSecret: parsed.config?.feishuAppSecret,
+        feishuVerificationToken: parsed.config?.feishuVerificationToken,
+        feishuSigningSecret: parsed.config?.feishuSigningSecret,
+        feishuDefaultChatId: parsed.config?.feishuDefaultChatId,
+        lastActiveChatId: parsed.config?.lastActiveChatId
       }
     };
 
