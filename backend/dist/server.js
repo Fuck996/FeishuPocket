@@ -1032,7 +1032,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.24' });
+    res.json({ success: true, version: '0.3.25' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1969,7 +1969,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 await applyTransaction({
                     childId: targetChild.id,
                     amount: Math.abs(action.amount),
-                    reason: '手动余额增加',
+                    reason: action.reason ?? '手动余额增加',
                     type: 'manual',
                     source: 'bot',
                     actorUserId: senderOpenId,
@@ -1984,7 +1984,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 await applyTransaction({
                     childId: targetChild.id,
                     amount: -Math.abs(action.amount),
-                    reason: '手动余额减少',
+                    reason: action.reason ?? '手动余额减少',
                     type: 'manual',
                     source: 'bot',
                     actorUserId: senderOpenId,
