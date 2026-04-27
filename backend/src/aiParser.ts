@@ -71,6 +71,19 @@ function normalizeAction(action: ParsedBotAction): ParsedBotAction {
 function parseByRegex(message: string): ParsedBotAction {
   const cleaned = message.replace(/[，。！？；、]/g, ' ').trim();
 
+  const queryBalanceA = cleaned.match(/^(?:查询余额|查余额|余额|看余额|当前余额|现在余额)$/);
+  if (queryBalanceA) {
+    return { intent: 'query_balance' };
+  }
+
+  const queryBalanceB = cleaned.match(/(?:查询|查|看).{0,3}([\u4e00-\u9fa5A-Za-z0-9_-]{1,12})?.{0,2}余额/);
+  if (queryBalanceB) {
+    return {
+      intent: 'query_balance',
+      childName: queryBalanceB[1]
+    };
+  }
+
   const setDailyA = cleaned.match(/(?:设置|调整|改成|改为|改|定为).{0,10}(?:每日|每天).{0,8}(?:额度|零花钱)?\s*(\d+(?:\.\d+)?)\s*(?:元|块)?(?:.*?(?:给|为)?([\u4e00-\u9fa5A-Za-z0-9_-]{1,12}))?/);
   if (setDailyA) {
     return {
@@ -171,7 +184,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
     const prompt = `你是一个家庭零花钱系统指令解析器。
   请只返回 JSON 对象，不要代码块，不要额外解释。
   字段: intent, childName, amount, rewardKeyword, reason, hour, minute。
-  intent 只允许: set_daily_allowance|set_reward_rule|deduct_expense|set_weekly_notify|reward_from_message|unknown。
+  intent 只允许: set_daily_allowance|set_reward_rule|deduct_expense|set_weekly_notify|reward_from_message|query_balance|unknown。
 
   识别规则:
   1) amount 单位是元，输出 number。若用户说“8块”“8元钱”，统一转成 8。
@@ -183,6 +196,7 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
      - “给小明配个家务奖励5元” => set_reward_rule
      - “小明今天买文具花了18” => deduct_expense
      - “小明完成家务了” => reward_from_message
+      - “查询余额” / “余额” => query_balance
   6) 仅当信息不足或语义冲突时返回 unknown。
 
   示例A: "设置小明每日零花钱12元" -> {"intent":"set_daily_allowance","childName":"小明","amount":12}
@@ -191,6 +205,8 @@ export async function parseBotAction(message: string, openAiApiKey?: string, ope
   示例D: "扣除小明8元买零食" -> {"intent":"deduct_expense","childName":"小明","amount":8,"reason":"买零食"}
   示例E: "设置每周统计通知20:30" -> {"intent":"set_weekly_notify","hour":20,"minute":30}
   示例F: "小明完成了家务" -> {"intent":"reward_from_message","childName":"小明","rewardKeyword":"家务","reason":"完成家务"}
+  示例G: "查询余额" -> {"intent":"query_balance"}
+  示例H: "查小明余额" -> {"intent":"query_balance","childName":"小明"}
 
   消息: ${message}`;
 

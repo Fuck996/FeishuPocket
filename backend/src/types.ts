@@ -131,7 +131,7 @@ export interface AppStore {
 }
 
 export interface ParsedBotAction {
-  intent: 'set_daily_allowance' | 'set_reward_rule' | 'deduct_expense' | 'set_weekly_notify' | 'reward_from_message' | 'unknown';
+  intent: 'set_daily_allowance' | 'set_reward_rule' | 'deduct_expense' | 'set_weekly_notify' | 'reward_from_message' | 'query_balance' | 'unknown';
   childName?: string;
   amount?: number;
   rewardKeyword?: string;

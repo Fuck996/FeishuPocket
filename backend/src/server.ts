@@ -146,11 +146,6 @@ function verifyFeishuSignature(req: AuthedRequest): boolean {
     return true; // 没有配置则不校验
   }
 
-  const secret = secrets[0]; // 使用第一个匹配（webhook 一般只有一个）
-  if (!secret) {
-    return true;
-  }
-
   const timestamp = req.header('x-lark-request-timestamp') ?? req.header('X-Lark-Request-Timestamp');
   const nonce = req.header('x-lark-request-nonce') ?? req.header('X-Lark-Request-Nonce');
   const signature = req.header('x-lark-signature') ?? req.header('X-Lark-Signature');
@@ -161,11 +156,12 @@ function verifyFeishuSignature(req: AuthedRequest): boolean {
   }
 
   const plain = `${timestamp}${nonce}${rawBody}`;
-  const base64Sign = crypto.createHmac('sha256', secret).update(plain).digest('base64');
-  const hexSign = crypto.createHmac('sha256', secret).update(plain).digest('hex');
-  const withPrefix = `sha256=${hexSign}`;
-
-  return safeEqual(signature, base64Sign) || safeEqual(signature, hexSign) || safeEqual(signature, withPrefix);
+  return secrets.some((secret) => {
+    const base64Sign = crypto.createHmac('sha256', secret).update(plain).digest('base64');
+    const hexSign = crypto.createHmac('sha256', secret).update(plain).digest('hex');
+    const withPrefix = `sha256=${hexSign}`;
+    return safeEqual(signature, base64Sign) || safeEqual(signature, hexSign) || safeEqual(signature, withPrefix);
+  });
 }
 
 function extractFeishuEvent(reqBody: unknown): {
@@ -353,6 +349,56 @@ function resolveActorDisplay(source: MoneyTransaction['source'], actorUserId?: s
     u.id === actorUserId || u.username === actorUserId || u.boundFeishuUserId === actorUserId
   );
   return actor?.username ?? actorUserId;
+}
+
+function buildBalanceSnapshotCardPayload(child: ChildProfile): FeishuCardPayload {
+  const latest = [...store.getSnapshot().transactions]
+    .filter((item) => item.childId === child.id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+  const basePayload: FeishuCardPayload = {
+    title: '余额查询结果',
+    lines: []
+  };
+
+  if (!latest) {
+    basePayload.lines = [
+      `**对象**：${child.name}`,
+      `💰 **当前余额**：${child.balance.toFixed(2)}元`,
+      `**说明**：暂无历史变动记录`
+    ];
+    return basePayload;
+  }
+
+  const actorDisplay = resolveActorDisplay(latest.source, latest.actorUserId);
+  const { date, time } = formatDateTimeCn(latest.createdAt);
+
+  basePayload.lines = [
+    `**对象**：${child.name}`,
+    `💰 **最近变动金额**：${amountWithSign(latest.amount)}元   |   **当前余额**：${child.balance.toFixed(2)}元`,
+    `**变动原因**：${latest.reason}`,
+    `**变动时间**：${date} ${time}`,
+    `**变动操作人**：${actorDisplay}`
+  ];
+
+  const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
+  if (templateId) {
+    basePayload.templateId = templateId;
+    basePayload.templateVariable = {
+      child_avatar: resolveAvatarForFeishu(child),
+      child_name: child.name,
+      balance_after: `${child.balance.toFixed(2)}元`,
+      change_amount: `${amountWithSign(latest.amount)}元`,
+      change_reason: latest.reason,
+      change_date: date,
+      change_time: time,
+      operator_name: actorDisplay,
+      transaction_type: latest.type,
+      transaction_source: latest.source
+    };
+  }
+
+  return basePayload;
 }
 
 function inferSuggestion(increasedAmount: number, expenseAmount: number, remainingAmount: number): string {
@@ -670,6 +716,27 @@ function resolveDiagnosticRobot(chatId?: string): RobotConfig | undefined {
   return enabledRobots[0];
 }
 
+function pushWebhookRejectLog(req: AuthedRequest, reason: string): void {
+  const { senderOpenId, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+  const robot = resolveDiagnosticRobot(chatId);
+  if (!robot) {
+    return;
+  }
+
+  const preview = contentRaw ? extractMessageText(contentRaw, messageType).trim().slice(0, 160) : undefined;
+  pushBotLog({
+    id: nanoid(),
+    robotId: robot.id,
+    time: new Date().toISOString(),
+    direction: 'in',
+    senderOpenId,
+    chatId,
+    rawText: preview,
+    status: 'failed',
+    error: reason
+  });
+}
+
 function pickRobotForAction(robots: RobotConfig[], childName?: string): RobotConfig | undefined {
   if (robots.length <= 1) {
     return robots[0];
@@ -905,7 +972,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.8' });
+  res.json({ success: true, version: '0.3.9' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1906,6 +1973,23 @@ async function processBotMessage(
         });
         break;
       }
+      case 'query_balance': {
+        if (!targetChild) throw new Error('未找到目标小孩或无权限');
+        const payload = buildBalanceSnapshotCardPayload(targetChild);
+        const msgId = await sendRobotCard(payload, chatId, targetChild.id);
+        pushBotLog({
+          id: nanoid(),
+          robotId: robot.id,
+          time: new Date().toISOString(),
+          direction: 'out',
+          chatId,
+          messageId: msgId,
+          msgType: 'interactive',
+          cardTitle: payload.title,
+          status: 'ok'
+        });
+        break;
+      }
       default:
         break;
     }
@@ -1948,11 +2032,13 @@ async function processBotMessage(
 
 app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedRequest, res) => {
   if (!verifyFeishuToken(req.body)) {
+    pushWebhookRejectLog(req, 'webhook_token_verify_failed');
     res.status(401).json({ success: false, error: '飞书 token 校验失败' });
     return;
   }
 
   if (!verifyFeishuSignature(req)) {
+    pushWebhookRejectLog(req, 'webhook_signature_verify_failed');
     res.status(401).json({ success: false, error: '飞书签名校验失败' });
     return;
   }
