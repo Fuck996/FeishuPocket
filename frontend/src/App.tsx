@@ -32,6 +32,7 @@ import {
   updateModel,
   updatePrompt,
   updateRobot,
+  getRobotChats,
   testRobot
 } from './api';
 import { ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, UserInfo, WeeklySummary } from './types';
@@ -57,7 +58,6 @@ interface RobotDraft {
   enabled: boolean;
   childIds: string[];
   controllerOpenIdsText: string;
-  allowedChatIdsText: string;
   // 飞书接入凭证（按机器人独立配置）
   feishuMode: 'app' | 'webhook';
   feishuAppId: string;
@@ -198,7 +198,6 @@ function createEmptyRobotDraft(): RobotDraft {
     enabled: true,
     childIds: [],
     controllerOpenIdsText: '',
-    allowedChatIdsText: '',
     feishuMode: 'app',
     feishuAppId: '',
     feishuAppSecret: '',
@@ -392,6 +391,7 @@ function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [children, setChildren] = useState<ChildProfile[]>([]);
   const [robots, setRobots] = useState<RobotConfig[]>([]);
+  const [robotChatOptions, setRobotChatOptions] = useState<Array<{ chatId: string; name: string }>>([]);
   const [transactions, setTransactions] = useState<MoneyTransaction[]>([]);
   const [summaries, setSummaries] = useState<WeeklySummary[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -570,7 +570,6 @@ function App() {
       enabled: robot.enabled,
       childIds: robot.childIds,
       controllerOpenIdsText: robot.controllerOpenIds.join('\n'),
-      allowedChatIdsText: robot.allowedChatIds.join('\n'),
       feishuMode: robot.feishuMode ?? 'app',
       feishuAppId: robot.feishuAppId ?? '',
       feishuAppSecret: robot.feishuAppSecret ?? '',
@@ -669,7 +668,6 @@ function App() {
       enabled: robotDraft.enabled,
       childIds: robotDraft.childIds,
       controllerOpenIds: parseTextList(robotDraft.controllerOpenIdsText),
-      allowedChatIds: parseTextList(robotDraft.allowedChatIdsText),
       feishuMode: robotDraft.feishuMode,
       feishuAppId: robotDraft.feishuAppId.trim(),
       feishuAppSecret: robotDraft.feishuAppSecret.trim(),
@@ -1462,11 +1460,6 @@ function App() {
                 <textarea value={robotDraft.controllerOpenIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, controllerOpenIdsText: event.target.value }))} rows={6} placeholder="留空则任意用户都可控制" />
                 <span className="field-hint">每行一个飞书用户 OpenID（ou_xxx），留空则任意用户都可控制；可在飞书 App「我的」→「关于飞书」→「开发者工具」→「个人 OpenID」中查到</span>
               </label>
-              <label>
-                允许触发的 Chat ID
-                <textarea value={robotDraft.allowedChatIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, allowedChatIdsText: event.target.value }))} rows={6} placeholder="留空表示所有会话都可触发" />
-                <span className="field-hint">填写允许触发该机器人的飞书群/会话 Chat ID（oc_xxx），每行一个，留空则任意会话均可触发</span>
-              </label>
             </div>
 
             <div className="form-section-divider">
@@ -1510,8 +1503,51 @@ function App() {
 
             <label>
               默认通知 Chat ID
-              <input value={robotDraft.feishuDefaultChatId} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuDefaultChatId: event.target.value }))} placeholder="oc_xxxxxxxxxxxxxxxxxxxxxxxx" />
-              <span className="field-hint">机器人主动推送消息的目标群 Chat ID（oc_xxx）。在群内发任意消息后会自动更新</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  value={robotDraft.feishuDefaultChatId}
+                  onChange={(event) => setRobotDraft((current) => ({ ...current, feishuDefaultChatId: event.target.value }))}
+                  placeholder="oc_xxxxxxxxxxxxxxxxxxxxxxxx"
+                  style={{ flex: 1 }}
+                />
+                {robotView.mode === 'edit' && robotDraft.feishuMode === 'app' && robotDraft.feishuAppId && (
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    style={{ whiteSpace: 'nowrap' }}
+                    onClick={async () => {
+                      try {
+                        const id = (robotView as { mode: 'edit'; robotId: string }).robotId;
+                        const list = await getRobotChats(id);
+                        setRobotChatOptions(list);
+                        if (list.length === 0) showNotice('该机器人未加入任何群', 'success');
+                      } catch (error) {
+                        handleRequestError(error);
+                      }
+                    }}
+                  >
+                    获取群列表
+                  </button>
+                )}
+              </div>
+              {robotChatOptions.length > 0 && (
+                <select
+                  defaultValue=""
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      setRobotDraft((current) => ({ ...current, feishuDefaultChatId: event.target.value }));
+                      setRobotChatOptions([]);
+                    }
+                  }}
+                  style={{ marginTop: '6px' }}
+                >
+                  <option value="">— 选择群 —</option>
+                  {robotChatOptions.map((chat) => (
+                    <option key={chat.chatId} value={chat.chatId}>{chat.name}（{chat.chatId}）</option>
+                  ))}
+                </select>
+              )}
+              <span className="field-hint">机器人主动推送消息的目标群 Chat ID。点「获取群列表」可直接选择（需先保存凭证）</span>
             </label>
 
             {robotDraft.feishuMode === 'webhook' && (

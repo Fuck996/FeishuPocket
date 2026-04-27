@@ -422,7 +422,7 @@ function normalizeStringArray(value) {
     }
     return Array.from(new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean)));
 }
-function resolveMatchedRobots(senderOpenId, chatId) {
+function resolveMatchedRobots(senderOpenId) {
     return store.getSnapshot().robots.filter((robot) => {
         if (!robot.enabled) {
             return false;
@@ -430,10 +430,7 @@ function resolveMatchedRobots(senderOpenId, chatId) {
         if (robot.controllerOpenIds.length > 0 && !robot.controllerOpenIds.includes(senderOpenId)) {
             return false;
         }
-        if (robot.allowedChatIds.length === 0) {
-            return true;
-        }
-        return !!chatId && robot.allowedChatIds.includes(chatId);
+        return true;
     });
 }
 function pickRobotForAction(robots, childName) {
@@ -869,11 +866,10 @@ app.get('/api/robots', requireAuth, requireRole('admin'), (_req, res) => {
     res.json({ success: true, data: store.getSnapshot().robots });
 });
 app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
-    const { name, enabled, childIds, controllerOpenIds, allowedChatIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
+    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
     const normalizedName = String(name ?? '').trim();
     const normalizedChildIds = normalizeStringArray(childIds);
     const normalizedControllerOpenIds = normalizeStringArray(controllerOpenIds);
-    const normalizedAllowedChatIds = normalizeStringArray(allowedChatIds);
     if (!normalizedName) {
         res.status(400).json({ success: false, error: '机器人名称必填' });
         return;
@@ -889,7 +885,6 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
         enabled: enabled !== false,
         childIds: normalizedChildIds,
         controllerOpenIds: normalizedControllerOpenIds,
-        allowedChatIds: normalizedAllowedChatIds,
         feishuMode: feishuMode ?? undefined,
         feishuAppId: feishuAppId ?? undefined,
         feishuAppSecret: feishuAppSecret ?? undefined,
@@ -907,7 +902,7 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
 });
 app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
     const { robotId } = req.params;
-    const { name, enabled, childIds, controllerOpenIds, allowedChatIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
+    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
     const exists = store.getSnapshot().robots.some((item) => item.id === robotId);
     if (!exists) {
         res.status(404).json({ success: false, error: '机器人不存在' });
@@ -916,7 +911,6 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
     const normalizedName = name === undefined ? undefined : String(name).trim();
     const normalizedChildIds = childIds === undefined ? undefined : normalizeStringArray(childIds);
     const normalizedControllerOpenIds = controllerOpenIds === undefined ? undefined : normalizeStringArray(controllerOpenIds);
-    const normalizedAllowedChatIds = allowedChatIds === undefined ? undefined : normalizeStringArray(allowedChatIds);
     if (normalizedName !== undefined && !normalizedName) {
         res.status(400).json({ success: false, error: '机器人名称不能为空' });
         return;
@@ -939,8 +933,6 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
             robot.childIds = normalizedChildIds;
         if (normalizedControllerOpenIds !== undefined)
             robot.controllerOpenIds = normalizedControllerOpenIds;
-        if (normalizedAllowedChatIds !== undefined)
-            robot.allowedChatIds = normalizedAllowedChatIds;
         if (feishuMode !== undefined)
             robot.feishuMode = feishuMode;
         if (feishuAppId !== undefined)
@@ -1001,6 +993,54 @@ app.post('/api/robots/:robotId/test', requireAuth, requireRole('admin'), async (
     }
     catch (error) {
         const message = error instanceof Error ? error.message : '发送失败';
+        res.status(500).json({ success: false, error: message });
+    }
+});
+// 获取机器人可见的飞书群列表（调用飞书 im/v1/chats/search API）
+app.get('/api/robots/:robotId/chats', requireAuth, requireRole('admin'), async (req, res) => {
+    const { robotId } = req.params;
+    const { query = '' } = req.query;
+    const robot = store.getSnapshot().robots.find((r) => r.id === robotId);
+    if (!robot) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    if (!robot.feishuAppId || !robot.feishuAppSecret) {
+        res.status(400).json({ success: false, error: '该机器人未配置 App ID 或 App Secret，无法查询群列表' });
+        return;
+    }
+    try {
+        // 第一步：获取 tenant_access_token
+        const tokenResp = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ app_id: robot.feishuAppId, app_secret: robot.feishuAppSecret })
+        });
+        const tokenData = await tokenResp.json();
+        if (tokenData.code !== 0 || !tokenData.tenant_access_token) {
+            res.status(400).json({ success: false, error: `获取飞书 token 失败：${tokenData.msg}` });
+            return;
+        }
+        // 第二步：搜索机器人可见的群列表
+        const params = new URLSearchParams({ page_size: '50' });
+        if (query)
+            params.set('query', query);
+        const chatResp = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/search?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
+        });
+        const chatData = await chatResp.json();
+        if (chatData.code !== 0) {
+            res.status(400).json({ success: false, error: `查询群列表失败：${chatData.msg}` });
+            return;
+        }
+        const items = (chatData.data?.items ?? []).map((item) => ({
+            chatId: item.chat_id,
+            name: item.name
+        }));
+        res.json({ success: true, data: items });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : '请求失败';
         res.status(500).json({ success: false, error: message });
     }
 });
@@ -1219,7 +1259,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
         return null;
     if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId))
         return null;
-    const matchedRobots = resolveMatchedRobots(senderOpenId, chatId);
+    const matchedRobots = resolveMatchedRobots(senderOpenId ?? '');
     if (matchedRobots.length === 0)
         return null;
     let text = '';
@@ -1380,8 +1420,8 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
     }
     const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
     if (chatId) {
-        // 找到对应的机器人并更新其最近活跃 chatId
-        const matchedRobot = store.getSnapshot().robots.find((r) => r.allowedChatIds.length === 0 || r.allowedChatIds.includes(chatId));
+        // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
+        const matchedRobot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook');
         if (matchedRobot) {
             store.update((draft) => {
                 const r = draft.robots.find((item) => item.id === matchedRobot.id);

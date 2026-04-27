@@ -46,7 +46,6 @@ export interface RobotConfig {
   enabled: boolean;
   childIds: string[];
   controllerOpenIds: string[];
-  allowedChatIds: string[];
   // 飞书接入凭证（按机器人配置）
   feishuMode?: 'app' | 'webhook';
   feishuWebhookUrl?: string;

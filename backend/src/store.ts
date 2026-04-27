@@ -98,7 +98,6 @@ export class JsonStore {
         enabled: r.enabled ?? true,
         childIds: r.childIds ?? [],
         controllerOpenIds: r.controllerOpenIds ?? [],
-        allowedChatIds: r.allowedChatIds ?? [],
         feishuMode: r.feishuMode,
         feishuWebhookUrl: r.feishuWebhookUrl,
         feishuAppId: r.feishuAppId,

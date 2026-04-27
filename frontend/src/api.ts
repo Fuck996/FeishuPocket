@@ -161,7 +161,6 @@ export async function createRobot(payload: {
   enabled: boolean;
   childIds: string[];
   controllerOpenIds: string[];
-  allowedChatIds: string[];
 }): Promise<RobotConfig> {
   const result = await request<{ success: true; data: RobotConfig }>('/api/robots', {
     method: 'POST',
@@ -189,6 +188,12 @@ export async function testRobot(robotId: string): Promise<{ message: string }> {
     method: 'POST'
   });
   return { message: result.message };
+}
+
+export async function getRobotChats(robotId: string, query?: string): Promise<Array<{ chatId: string; name: string }>> {
+  const params = query ? `?query=${encodeURIComponent(query)}` : '';
+  const result = await request<{ success: true; data: Array<{ chatId: string; name: string }> }>(`/api/robots/${robotId}/chats${params}`);
+  return result.data;
 }
 
 export async function getTransactions(): Promise<MoneyTransaction[]> {
