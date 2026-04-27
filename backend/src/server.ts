@@ -24,6 +24,7 @@ const botLogs = new Map<string, BotLogEntry[]>();
 const BOT_LOG_MAX = 200;
 const inboundMessageDedup = new Map<string, number>();
 const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const FEISHU_MESSAGE_MAX_AGE_MS = Number(process.env.FEISHU_MESSAGE_MAX_AGE_MS ?? 30 * 60 * 1000);
 const feishuUserNameCache = new Map<string, { name: string; expireAt: number }>();
 const FEISHU_USER_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -33,6 +34,31 @@ type FeishuUserIdentity = {
   unionId?: string;
   displayNameHint?: string;
 };
+
+function normalizeFeishuTimestampMs(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // 飞书常见为秒(10位)或毫秒(13位)
+    return raw < 1e12 ? Math.floor(raw * 1000) : Math.floor(raw);
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric) && Number.isFinite(numeric)) {
+      return numeric < 1e12 ? Math.floor(numeric * 1000) : Math.floor(numeric);
+    }
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
 function pushBotLog(entry: BotLogEntry): void {
   const list = botLogs.get(entry.robotId) ?? [];
@@ -340,6 +366,7 @@ function extractFeishuEvent(reqBody: unknown): {
   senderUserId?: string;
   senderUnionId?: string;
   senderDisplayNameHint?: string;
+  messageCreateTimeMs?: number;
   senderType?: string;
   messageType?: string;
   contentRaw?: string;
@@ -386,6 +413,13 @@ function extractFeishuEvent(reqBody: unknown): {
   const messageType = (message.message_type as string | undefined) ?? (message.type as string | undefined);
   const chatId = (message.chat_id as string | undefined) ?? ((event.chat as Record<string, unknown> | undefined)?.chat_id as string | undefined);
   const messageId = message.message_id as string | undefined;
+  const header = (body.header as Record<string, unknown> | undefined) ?? {};
+  const messageCreateTimeMs =
+    normalizeFeishuTimestampMs(message.create_time)
+    ?? normalizeFeishuTimestampMs(event.create_time)
+    ?? normalizeFeishuTimestampMs(header.create_time)
+    ?? normalizeFeishuTimestampMs(body.ts)
+    ?? normalizeFeishuTimestampMs(body.timestamp);
   const contentField = message.content;
 
   let contentRaw: string | undefined;
@@ -402,6 +436,7 @@ function extractFeishuEvent(reqBody: unknown): {
     senderUserId,
     senderUnionId,
     senderDisplayNameHint,
+    messageCreateTimeMs,
     senderType,
     messageType,
     contentRaw,
@@ -1237,7 +1272,7 @@ async function initFeishuWsClient(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const eventDispatcher = new Lark.EventDispatcher({}).register({
       'im.message.receive_v1': async (data: Record<string, unknown>) => {
-        const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
+        const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(data);
         if (chatId && robotId) {
           store.update((draft) => {
             const r = draft.robots.find((item) => item.id === robotId);
@@ -1245,7 +1280,7 @@ async function initFeishuWsClient(): Promise<void> {
           });
         }
         try {
-          await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
+          await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
         } catch (error) {
           console.error('[飞书WS] 消息处理失败:', error);
         }
@@ -1318,7 +1353,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.26' });
+  res.json({ success: true, version: '0.3.27' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2103,6 +2138,7 @@ async function processBotMessage(
   senderUserId: string | undefined,
   senderUnionId: string | undefined,
   senderDisplayNameHint: string | undefined,
+  messageCreateTimeMs: number | undefined,
   senderType: string | undefined,
   messageType: string | undefined,
   contentRaw: string | undefined,
@@ -2139,6 +2175,13 @@ async function processBotMessage(
   if (!contentRaw) {
     logIgnoredInbound('ignored_missing_message_content');
     return null;
+  }
+  if (messageCreateTimeMs) {
+    const ageMs = Date.now() - messageCreateTimeMs;
+    if (ageMs > FEISHU_MESSAGE_MAX_AGE_MS) {
+      logIgnoredInbound(`ignored_stale_message_age_ms:${ageMs}`);
+      return null;
+    }
   }
   if (messageType && messageType !== 'text' && messageType !== 'post') {
     logIgnoredInbound(`ignored_unsupported_message_type:${messageType}`);
@@ -2561,7 +2604,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
     return;
   }
 
-  const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
+  const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
 
   if (chatId) {
     // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
@@ -2575,7 +2618,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
   }
 
   try {
-    const action = await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, senderType, messageType, contentRaw, chatId, messageId);
+    const action = await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
     if (!action) {
       res.json({ success: true, ignored: true });
       return;
