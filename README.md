@@ -44,19 +44,19 @@ set MCP_BACKEND_TOKEN=你的管理员JWT
 set BACKEND_URL=http://localhost:3000
 npm start
 
-## 群晖容器部署
-使用根目录 docker-compose.synology.yml：
+## 容器部署（单容器）
+使用根目录 docker-compose.yml：
 
-docker compose -f docker-compose.synology.yml pull
-docker compose -f docker-compose.synology.yml up -d
+docker compose pull
+docker compose up -d
 
 ### GitHub 直接构建镜像
 1. 在 GitHub Actions 执行工作流 Build & Push Images。
-2. 填写 image_tag（例如 v0.1.2）并执行。
+2. 填写 image_tag（例如 v0.2.1）并执行。
 3. 群晖 .env 中设置：
 
 IMAGE_NAMESPACE=你的GitHub用户名或组织名（小写）
-IMAGE_TAG=v0.1.2
+IMAGE_TAG=v0.2.1
 
 详细步骤见 docs/SYNOLOGY_DEPLOYMENT.md。
 

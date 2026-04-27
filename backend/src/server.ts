@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +30,7 @@ const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
 const jwtSecret = process.env.JWT_SECRET ?? 'change-this-in-production';
 const databasePath = process.env.DATABASE_PATH ?? path.resolve(__dirname, '../data/store.json');
+const frontendDistPath = path.resolve(__dirname, '../public');
 
 const store = new JsonStore(databasePath);
 store.load();
@@ -40,6 +42,11 @@ app.use(express.json({
     (req as AuthedRequest).rawBody = buffer.toString('utf8');
   }
 }));
+
+// 一体化部署时由后端托管前端静态文件。
+if (fs.existsSync(frontendDistPath)) {
+  app.use(express.static(frontendDistPath));
+}
 
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
@@ -401,7 +408,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.0' });
+  res.json({ success: true, version: '0.2.1' });
 });
 
 app.post('/api/init-admin', async (req, res) => {
@@ -1116,6 +1123,16 @@ app.delete('/api/prompts/:id', requireAuth, requireRole('admin'), (req: AuthedRe
     res.status(404).json({ success: false, error: '提示词模板不存在' });
   }
 });
+
+if (fs.existsSync(frontendDistPath)) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+}
 
 app.listen(port, host, () => {
   console.log(`Feishu Pocket backend running at http://${host}:${port}`);

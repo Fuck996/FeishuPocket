@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   build-and-push:
-    name: Build backend/frontend images
+    name: Build all-in-one image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -55,22 +55,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push backend image
+      - name: Build and push all-in-one image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry == 'true' }}
           tags: |
-            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-backend:${{ steps.vars.outputs.image_tag }}
-            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-backend:latest
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry == 'true' }}
-          tags: |
-            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-frontend:${{ steps.vars.outputs.image_tag }}
-            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket-frontend:latest
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket:${{ steps.vars.outputs.image_tag }}
+            ghcr.io/${{ steps.vars.outputs.owner_lower }}/feishu-pocket:latest
