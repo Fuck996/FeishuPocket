@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 const BUILT_IN_DEEPSEEK_MODEL_ID = 'built-in-deepseek';
-const BUILT_IN_PROMPT_VERSION = 'pocket-money-v3';
+const BUILT_IN_PROMPT_VERSION = 'pocket-money-v4';
 const BUILT_IN_MCP_PROMPTS = [
     {
         id: 'vscode-chat-report',
@@ -40,7 +40,7 @@ const BUILT_IN_MCP_PROMPTS = [
         id: 'optimization-suggestion',
         name: '控制账号触发规则模板',
         purpose: 'optimization',
-        content: `控制账号权限与触发规则说明（平台内置文档）。\n\n权限设计：\n- 小孩由机器人配置绑定，每个机器人的 childIds 字段定义它可管理的小孩；\n- 每个机器人的 controllerOpenIds 字段定义哪些飞书用户有权限触发该机器人；\n- controllerOpenIds 中的用户在单聊和群聊中发言均可触发；\n- 未在 controllerOpenIds 中的用户发言必须忽略；\n- 机器人自身的消息必须忽略，防止循环。\n\n注：小孩与控制账号的绑定关系已经由机器人配置确定，不需要每次识别或推断。`,
+        content: `控制账号权限与触发规则说明（平台内置文档）。\n\n权限设计：\n- 小孩由机器人配置绑定，每个机器人的 childIds 字段定义它可管理的小孩；\n- 每个机器人的 controllerOpenIds 字段定义哪些飞书用户有权限触发该机器人；\n- controllerOpenIds 为空则任意用户均可触发；\n- controllerOpenIds 中的用户在单聊和群聊中发言均可触发；\n- 未在 controllerOpenIds 中的用户发言必须忽略；\n- 机器人自身的消息必须忽略，防止循环。\n\n注：小孩与控制账号的绑定关系已经由机器人配置确定，不需要每次识别或推断。`,
         isBuiltIn: true,
         usageCount: 0
     }
