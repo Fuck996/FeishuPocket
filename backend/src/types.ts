@@ -73,6 +73,7 @@ export interface SystemConfig {
   feishuSigningSecret?: string;
   feishuDefaultChatId?: string;
   lastActiveChatId?: string;
+  builtInPromptVersion?: string;
 }
 
 export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';
