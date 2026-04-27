@@ -76,7 +76,7 @@ export async function getChildren(): Promise<ChildProfile[]> {
   return result.data;
 }
 
-export async function createChild(payload: { name: string; avatar: string; dailyAllowance: number }): Promise<void> {
+export async function createChild(payload: { name: string; avatar?: string; dailyAllowance: number }): Promise<void> {
   await request('/api/children', {
     method: 'POST',
     body: JSON.stringify(payload)

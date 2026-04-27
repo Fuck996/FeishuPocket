@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 import {
   adjustChild,
@@ -28,6 +28,19 @@ import {
   updatePrompt
 } from './api';
 import { ChildProfile, ModelConfig, OperatorUser, PromptTemplate, UserInfo, WeeklySummary } from './types';
+
+const DEFAULT_AVATAR = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="#E2E8F0"/><circle cx="64" cy="50" r="24" fill="#94A3B8"/><rect x="26" y="84" width="76" height="30" rx="15" fill="#94A3B8"/></svg>'
+)}`;
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('头像读取失败，请重试'));
+    reader.readAsDataURL(file);
+  });
+}
 
 function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -157,6 +170,29 @@ function App() {
       setNewChildAvatar('');
       setNewChildDaily(10);
       resetNotice('小孩创建成功');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function onChildAvatarSelected(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setNewChildAvatar('');
+      return;
+    }
+
+    // 头像可选，上传时限制 2MB，防止 store 文件过大。
+    if (file.size > 2 * 1024 * 1024) {
+      setError('头像文件不能超过2MB');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const avatarDataUrl = await fileToDataUrl(file);
+      setNewChildAvatar(avatarDataUrl);
+      setError('');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -316,9 +352,11 @@ function App() {
               <input value={newChildName} onChange={(e) => setNewChildName(e.target.value)} required />
             </label>
             <label>
-              头像URL
-              <input value={newChildAvatar} onChange={(e) => setNewChildAvatar(e.target.value)} />
+              头像上传（可选）
+              <input type="file" accept="image/*" onChange={onChildAvatarSelected} />
             </label>
+            <p>未上传头像时，将自动使用默认头像。</p>
+            {newChildAvatar && <img src={newChildAvatar} alt="头像预览" className="avatar" />}
             <label>
               每日额度(元)
               <input type="number" min={0} step="0.1" value={newChildDaily} onChange={(e) => setNewChildDaily(Number(e.target.value))} />
@@ -584,11 +622,19 @@ function ChildItem(props: {
   const [daily, setDaily] = useState(props.child.dailyAllowance);
   const [rewardKeyword, setRewardKeyword] = useState('家务');
   const [rewardAmount, setRewardAmount] = useState(5);
+  const avatarSrc = props.child.avatar || DEFAULT_AVATAR;
 
   return (
     <div className="sub-card">
       <p><strong>{props.child.name}</strong>（余额 {props.child.balance.toFixed(2)}元）</p>
-      {props.child.avatar ? <img src={props.child.avatar} alt={props.child.name} className="avatar" /> : null}
+      <img
+        src={avatarSrc}
+        alt={props.child.name}
+        className="avatar"
+        onError={(event) => {
+          event.currentTarget.src = DEFAULT_AVATAR;
+        }}
+      />
 
       {props.canManage && (
         <>
