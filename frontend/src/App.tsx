@@ -1475,10 +1475,10 @@ function App() {
             <label>
               飞书接入方式
               <select value={robotDraft.feishuMode} onChange={(event) => setRobotDraft((current) => ({ ...current, feishuMode: event.target.value as 'app' | 'webhook' }))}>
-                <option value="app">自建应用事件订阅（推荐）</option>
-                <option value="webhook">群 webhook</option>
+                <option value="app">自建应用（WS 长连接，推荐）</option>
+                <option value="webhook">群 webhook（仅出消息）</option>
               </select>
-              <span className="field-hint">推荐「自建应用事件订阅」，可同时接收单聊和群聊消息；「群 webhook」仅支持群消息推送</span>
+              <span className="field-hint">推荐「自建应用（WS 长连接）」，可同时接收单聊和群聊消息；「群 webhook」仅支持主动向群内推送消息</span>
             </label>
 
             <div className="form-row">
