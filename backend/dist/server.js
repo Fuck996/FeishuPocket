@@ -18,6 +18,8 @@ const botLogs = new Map();
 const BOT_LOG_MAX = 200;
 const inboundMessageDedup = new Map();
 const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const feishuUserNameCache = new Map();
+const FEISHU_USER_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 function pushBotLog(entry) {
     const list = botLogs.get(entry.robotId) ?? [];
     list.push(entry);
@@ -44,6 +46,67 @@ function shouldProcessInboundMessage(messageId) {
     }
     inboundMessageDedup.set(messageId, now + INBOUND_MESSAGE_DEDUP_TTL_MS);
     return true;
+}
+function getCachedFeishuUserName(openId) {
+    const cached = feishuUserNameCache.get(openId);
+    if (!cached) {
+        return undefined;
+    }
+    if (cached.expireAt <= Date.now()) {
+        feishuUserNameCache.delete(openId);
+        return undefined;
+    }
+    return cached.name;
+}
+function setCachedFeishuUserName(openId, name) {
+    feishuUserNameCache.set(openId, {
+        name,
+        expireAt: Date.now() + FEISHU_USER_NAME_CACHE_TTL_MS
+    });
+}
+async function queryFeishuUserNameByOpenId(robot, openId) {
+    const cached = getCachedFeishuUserName(openId);
+    if (cached) {
+        return cached;
+    }
+    if (!robot.feishuAppId || !robot.feishuAppSecret) {
+        return undefined;
+    }
+    try {
+        const tokenResp = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ app_id: robot.feishuAppId, app_secret: robot.feishuAppSecret })
+        });
+        if (!tokenResp.ok) {
+            return undefined;
+        }
+        const tokenData = await tokenResp.json();
+        if (tokenData.code !== 0 || !tokenData.tenant_access_token) {
+            return undefined;
+        }
+        const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, {
+            headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
+        });
+        if (!userResp.ok) {
+            return undefined;
+        }
+        const userData = await userResp.json();
+        if (userData.code !== 0) {
+            return undefined;
+        }
+        const name = userData.data?.user?.name?.trim()
+            || userData.data?.user?.nickname?.trim()
+            || userData.data?.user?.en_name?.trim();
+        if (!name) {
+            return undefined;
+        }
+        setCachedFeishuUserName(openId, name);
+        return name;
+    }
+    catch {
+        return undefined;
+    }
 }
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -351,7 +414,7 @@ function formatDateTimeCn(iso) {
         time: date.toLocaleTimeString('zh-CN', { hour12: false })
     };
 }
-function resolveActorDisplay(source, actorUserId) {
+function resolveActorDisplay(source, actorUserId, actorDisplayName) {
     const sourceLabels = {
         admin: '管理员',
         operator: '操作员',
@@ -361,6 +424,15 @@ function resolveActorDisplay(source, actorUserId) {
     };
     if (!actorUserId) {
         return sourceLabels[source] ?? source;
+    }
+    if (actorDisplayName) {
+        return actorDisplayName;
+    }
+    if (source === 'bot') {
+        const cached = getCachedFeishuUserName(actorUserId);
+        if (cached) {
+            return cached;
+        }
     }
     const actor = store.getSnapshot().users.find((u) => u.id === actorUserId || u.username === actorUserId || u.boundFeishuUserId === actorUserId);
     return actor?.username ?? actorUserId;
@@ -381,7 +453,7 @@ function buildBalanceSnapshotCardPayload(child) {
         ];
         return basePayload;
     }
-    const actorDisplay = resolveActorDisplay(latest.source, latest.actorUserId);
+    const actorDisplay = resolveActorDisplay(latest.source, latest.actorUserId, latest.actorDisplayName);
     const { date, time } = formatDateTimeCn(latest.createdAt);
     basePayload.lines = [
         `**对象**：${child.name}`,
@@ -531,6 +603,7 @@ async function applyTransaction(input) {
         type: input.type,
         source: input.source,
         actorUserId: input.actorUserId,
+        actorDisplayName: input.actorDisplayName,
         createdAt: new Date().toISOString()
     };
     store.update((draft) => {
@@ -542,7 +615,7 @@ async function applyTransaction(input) {
         targetChild.updatedAt = new Date().toISOString();
         draft.transactions.push(transaction);
     });
-    const actorDisplay = resolveActorDisplay(input.source, input.actorUserId);
+    const actorDisplay = resolveActorDisplay(input.source, input.actorUserId, input.actorDisplayName);
     const updatedChild = store.getSnapshot().children.find((item) => item.id === input.childId);
     const currentBalance = updatedChild?.balance ?? child.balance;
     const { date, time } = formatDateTimeCn(transaction.createdAt);
@@ -957,7 +1030,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.19' });
+    res.json({ success: true, version: '0.3.20' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1752,6 +1825,9 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
     const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
+    const senderDisplayName = senderOpenId
+        ? await queryFeishuUserNameByOpenId(robot, senderOpenId)
+        : undefined;
     const targetChild = resolveChildFromAction(action, robot);
     if (!targetChild && action.intent !== 'set_weekly_notify') {
         throw new Error('未找到目标小孩或无权限');
@@ -1817,6 +1893,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     type: 'expense',
                     source: 'bot',
                     actorUserId: senderOpenId,
+                    actorDisplayName: senderDisplayName,
                     chatIdOverride: chatId
                 });
                 break;
@@ -1855,6 +1932,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     type: 'reward',
                     source: 'bot',
                     actorUserId: senderOpenId,
+                    actorDisplayName: senderDisplayName,
                     chatIdOverride: chatId
                 });
                 break;
@@ -1869,6 +1947,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     type: 'daily',
                     source: 'bot',
                     actorUserId: senderOpenId,
+                    actorDisplayName: senderDisplayName,
                     chatIdOverride: chatId
                 });
                 const today = new Date().toISOString().slice(0, 10);
@@ -1890,6 +1969,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     type: 'manual',
                     source: 'bot',
                     actorUserId: senderOpenId,
+                    actorDisplayName: senderDisplayName,
                     chatIdOverride: chatId
                 });
                 break;
@@ -1904,6 +1984,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     type: 'manual',
                     source: 'bot',
                     actorUserId: senderOpenId,
+                    actorDisplayName: senderDisplayName,
                     chatIdOverride: chatId
                 });
                 break;

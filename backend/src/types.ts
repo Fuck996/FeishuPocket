@@ -58,6 +58,7 @@ export interface MoneyTransaction {
   type: 'daily' | 'reward' | 'expense' | 'manual';
   source: 'admin' | 'operator' | 'bot' | 'schedule' | 'mcp';
   actorUserId?: string;
+  actorDisplayName?: string;
   createdAt: string;
 }
 
