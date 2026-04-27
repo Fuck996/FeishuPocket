@@ -97,3 +97,20 @@ export interface PromptTemplate {
   createdAt: string;
   updatedAt: string;
 }
+
+// 机器人运行日志（内存，不持久化）
+export interface BotLogEntry {
+  id: string;
+  robotId: string;
+  time: string;
+  direction: 'in' | 'out';
+  senderOpenId?: string;
+  chatId?: string;
+  rawText?: string;
+  intent?: string;
+  messageId?: string;
+  msgType?: string;
+  cardTitle?: string;
+  status: 'ok' | 'ignored' | 'failed' | 'unrecognized';
+  error?: string;
+}

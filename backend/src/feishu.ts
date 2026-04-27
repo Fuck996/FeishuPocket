@@ -83,9 +83,9 @@ async function sendByWebhook(webhookUrl: string, payload: FeishuCardPayload): Pr
   });
 }
 
-async function sendByApp(target: FeishuSendTarget, payload: FeishuCardPayload): Promise<void> {
+async function sendByApp(target: FeishuSendTarget, payload: FeishuCardPayload): Promise<string | undefined> {
   if (!target.appId || !target.appSecret || !target.chatId) {
-    return;
+    return undefined;
   }
 
   const tenantAccessToken = await getTenantAccessToken(target.appId, target.appSecret);
@@ -107,35 +107,37 @@ async function sendByApp(target: FeishuSendTarget, payload: FeishuCardPayload): 
   if (!response.ok) {
     throw new Error(`飞书应用消息发送失败 (${response.status})`);
   }
+
+  const data = await response.json() as { data?: { message_id?: string } };
+  return data.data?.message_id;
 }
 
-export async function sendFeishuCard(target: string | undefined | FeishuSendTarget, payload: FeishuCardPayload): Promise<void> {
+export async function sendFeishuCard(target: string | undefined | FeishuSendTarget, payload: FeishuCardPayload): Promise<string | undefined> {
   if (!target) {
-    return;
+    return undefined;
   }
 
   if (typeof target === 'string') {
     await sendByWebhook(target, payload);
-    return;
+    return undefined;
   }
 
   if (target.mode === 'app') {
-    await sendByApp(target, payload);
-    return;
+    return await sendByApp(target, payload);
   }
 
   if (target.mode === 'webhook' && target.webhookUrl) {
     await sendByWebhook(target.webhookUrl, payload);
-    return;
+    return undefined;
   }
 
   // 兼容未指定 mode 的场景：优先应用机器人，其次 webhook。
   if (target.appId && target.appSecret && target.chatId) {
-    await sendByApp(target, payload);
-    return;
+    return await sendByApp(target, payload);
   }
 
   if (target.webhookUrl) {
     await sendByWebhook(target.webhookUrl, payload);
   }
+  return undefined;
 }

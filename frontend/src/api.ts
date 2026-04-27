@@ -195,6 +195,11 @@ export async function getRobotChats(robotId: string): Promise<Array<{ chatId: st
   return result.data;
 }
 
+export async function getRobotLogs(robotId: string): Promise<import('./types').BotLogEntry[]> {
+  const result = await request<{ success: true; data: import('./types').BotLogEntry[] }>(`/api/robots/${robotId}/logs`);
+  return result.data;
+}
+
 export async function getTransactions(): Promise<MoneyTransaction[]> {
   const result = await request<{ success: true; data: MoneyTransaction[] }>('/api/transactions');
   return result.data;

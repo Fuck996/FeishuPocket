@@ -56,7 +56,7 @@ async function sendByWebhook(webhookUrl, payload) {
 }
 async function sendByApp(target, payload) {
     if (!target.appId || !target.appSecret || !target.chatId) {
-        return;
+        return undefined;
     }
     const tenantAccessToken = await getTenantAccessToken(target.appId, target.appSecret);
     const card = buildCardSchema(payload);
@@ -76,29 +76,30 @@ async function sendByApp(target, payload) {
     if (!response.ok) {
         throw new Error(`飞书应用消息发送失败 (${response.status})`);
     }
+    const data = await response.json();
+    return data.data?.message_id;
 }
 export async function sendFeishuCard(target, payload) {
     if (!target) {
-        return;
+        return undefined;
     }
     if (typeof target === 'string') {
         await sendByWebhook(target, payload);
-        return;
+        return undefined;
     }
     if (target.mode === 'app') {
-        await sendByApp(target, payload);
-        return;
+        return await sendByApp(target, payload);
     }
     if (target.mode === 'webhook' && target.webhookUrl) {
         await sendByWebhook(target.webhookUrl, payload);
-        return;
+        return undefined;
     }
     // 兼容未指定 mode 的场景：优先应用机器人，其次 webhook。
     if (target.appId && target.appSecret && target.chatId) {
-        await sendByApp(target, payload);
-        return;
+        return await sendByApp(target, payload);
     }
     if (target.webhookUrl) {
         await sendByWebhook(target.webhookUrl, payload);
     }
+    return undefined;
 }

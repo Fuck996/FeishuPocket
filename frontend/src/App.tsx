@@ -33,9 +33,10 @@ import {
   updatePrompt,
   updateRobot,
   getRobotChats,
+  getRobotLogs,
   testRobot
 } from './api';
-import { ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, UserInfo, WeeklySummary } from './types';
+import { BotLogEntry, ChildProfile, ModelConfig, MoneyTransaction, PromptTemplate, RobotConfig, UserInfo, WeeklySummary } from './types';
 
 const DEFAULT_AVATAR = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="#E2E8F0"/><circle cx="64" cy="50" r="24" fill="#94A3B8"/><rect x="26" y="84" width="76" height="30" rx="15" fill="#94A3B8"/></svg>'
@@ -392,6 +393,9 @@ function App() {
   const [children, setChildren] = useState<ChildProfile[]>([]);
   const [robots, setRobots] = useState<RobotConfig[]>([]);
   const [robotChatOptions, setRobotChatOptions] = useState<Array<{ chatId: string; name: string }>>([]);
+  const [robotLogs, setRobotLogs] = useState<BotLogEntry[]>([]);
+  const [robotLogsLoading, setRobotLogsLoading] = useState(false);
+  const [robotLogsTab, setRobotLogsTab] = useState<'config' | 'logs'>('config');
   const [transactions, setTransactions] = useState<MoneyTransaction[]>([]);
   const [summaries, setSummaries] = useState<WeeklySummary[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -579,11 +583,15 @@ function App() {
       feishuDefaultChatId: robot.feishuDefaultChatId ?? ''
     });
     setRobotView({ mode: 'edit', robotId: robot.id });
+    // 自动加载该机器人的最新日志
+    setRobotLogs([]);
+    void getRobotLogs(robot.id).then(setRobotLogs).catch(() => undefined);
   }
 
   function closeRobotEditor(): void {
     setRobotView({ mode: 'list' });
     setRobotDraft(createEmptyRobotDraft());
+    setRobotLogs([]);
   }
 
   function openCreateChild(): void {
@@ -1588,6 +1596,65 @@ function App() {
             </div>
           </form>
         </section>
+
+        {robotView.mode === 'edit' && (
+          <section className="panel-card">
+            <div className="robot-log-header">
+              <h3>运行日志</h3>
+              <button
+                type="button"
+                className="ghost-button ghost-button--sm"
+                onClick={async () => {
+                  const id = (robotView as { mode: 'edit'; robotId: string }).robotId;
+                  setRobotLogsLoading(true);
+                  try {
+                    const data = await getRobotLogs(id);
+                    setRobotLogs(data);
+                  } catch (err) {
+                    handleRequestError(err);
+                  } finally {
+                    setRobotLogsLoading(false);
+                  }
+                }}
+              >
+                {robotLogsLoading ? '刷新中…' : '刷新'}
+              </button>
+            </div>
+            <p className="field-hint">日志保存在内存中，服务重启后清空；每台机器人最多保留 200 条。</p>
+            {robotLogs.length === 0 ? (
+              <p className="empty-hint">暂无日志，等待消息触发后点击刷新。</p>
+            ) : (
+              <div className="robot-log-list">
+                {robotLogs.map((log) => (
+                  <div key={log.id} className={`robot-log-item robot-log-item--${log.direction} robot-log-item--${log.status}`}>
+                    <div className="robot-log-meta">
+                      <span className={`log-badge log-badge--${log.direction}`}>{log.direction === 'in' ? '收' : '发'}</span>
+                      <span className={`log-status log-status--${log.status}`}>
+                        {log.status === 'ok' ? '成功' : log.status === 'unrecognized' ? '未识别' : log.status === 'failed' ? '失败' : '忽略'}
+                      </span>
+                      <span className="log-time">{new Date(log.time).toLocaleString('zh-CN')}</span>
+                      {log.chatId && <span className="log-chat">群 {log.chatId}</span>}
+                    </div>
+                    {log.direction === 'in' && (
+                      <div className="robot-log-body">
+                        {log.rawText && <div className="log-text">「{log.rawText}」</div>}
+                        {log.intent && <div className="log-intent">意图：{log.intent}</div>}
+                        {log.senderOpenId && <div className="log-sender">发送者：{log.senderOpenId}</div>}
+                      </div>
+                    )}
+                    {log.direction === 'out' && (
+                      <div className="robot-log-body">
+                        {log.cardTitle && <div className="log-text">卡片：{log.cardTitle}</div>}
+                        {log.messageId && <div className="log-msgid">消息 ID：{log.messageId}</div>}
+                      </div>
+                    )}
+                    {log.error && <div className="log-error">{log.error}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     );
   }

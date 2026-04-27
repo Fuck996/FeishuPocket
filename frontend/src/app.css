@@ -1036,3 +1036,119 @@ button:disabled {
     right: 14px;
   }
 }
+/* ======== 机器人运行日志面板 ======== */
+.robot-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.robot-log-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.ghost-button--sm {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.empty-hint {
+  color: var(--text-sub);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+.robot-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.robot-log-item {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.robot-log-item--in {
+  border-left: 3px solid #3b82f6;
+}
+.robot-log-item--out {
+  border-left: 3px solid #10b981;
+}
+.robot-log-item--unrecognized {
+  border-left: 3px solid #f59e0b;
+}
+.robot-log-item--failed {
+  border-left: 3px solid #ef4444;
+}
+.robot-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.log-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.log-badge--in {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.log-badge--out {
+  background: #d1fae5;
+  color: #065f46;
+}
+.log-status {
+  font-size: 11px;
+  font-weight: 600;
+}
+.log-status--ok { color: #059669; }
+.log-status--failed { color: #dc2626; }
+.log-status--unrecognized { color: #d97706; }
+.log-status--ignored { color: #6b7280; }
+.log-time {
+  font-size: 11px;
+  color: var(--text-sub);
+}
+.log-chat {
+  font-size: 11px;
+  color: var(--text-sub);
+  font-family: monospace;
+}
+.robot-log-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-main);
+}
+.log-text {
+  font-size: 13px;
+  word-break: break-all;
+}
+.log-intent {
+  font-size: 12px;
+  color: #6366f1;
+}
+.log-sender {
+  font-size: 11px;
+  color: var(--text-sub);
+  font-family: monospace;
+}
+.log-msgid {
+  font-size: 11px;
+  color: var(--text-sub);
+  font-family: monospace;
+}
+.log-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #dc2626;
+}

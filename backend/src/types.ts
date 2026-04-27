@@ -139,3 +139,23 @@ export interface ParsedBotAction {
   hour?: number;
   minute?: number;
 }
+
+// 机器人运行日志（内存，不持久化）
+export interface BotLogEntry {
+  id: string;
+  robotId: string;
+  time: string;          // ISO 时间戳
+  direction: 'in' | 'out';  // in=收到飞书消息, out=发出飞书消息
+  // 收到消息相关
+  senderOpenId?: string;
+  chatId?: string;
+  rawText?: string;      // 原始文本
+  intent?: string;       // AI 识别意图
+  // 发出消息相关
+  messageId?: string;    // 飞书返回的消息 ID
+  msgType?: string;      // 消息类型
+  cardTitle?: string;    // 卡片标题
+  // 结果
+  status: 'ok' | 'ignored' | 'failed' | 'unrecognized';
+  error?: string;
+}

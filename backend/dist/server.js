@@ -13,6 +13,16 @@ import { sendFeishuCard } from './feishu.js';
 import { SchedulerService } from './scheduler.js';
 import { JsonStore } from './store.js';
 import { checkAllModelBalances } from './modelBalance.js';
+// 内存日志，按机器人 ID 存储，最多保留每机器人 200 条
+const botLogs = new Map();
+const BOT_LOG_MAX = 200;
+function pushBotLog(entry) {
+    const list = botLogs.get(entry.robotId) ?? [];
+    list.push(entry);
+    if (list.length > BOT_LOG_MAX)
+        list.splice(0, list.length - BOT_LOG_MAX);
+    botLogs.set(entry.robotId, list);
+}
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -193,7 +203,7 @@ async function sendRobotCard(payload, chatIdOverride, childId) {
     const target = childId
         ? resolveFeishuTargetForChild(childId, chatIdOverride)
         : resolveFeishuSendTarget(chatIdOverride);
-    await sendFeishuCard(target, payload);
+    return await sendFeishuCard(target, payload);
 }
 function sanitizeUser(user) {
     return {
@@ -641,7 +651,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.1' });
+    res.json({ success: true, version: '0.3.6' });
 });
 app.get('/api/setup-status', (_req, res) => {
     const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
@@ -996,6 +1006,12 @@ app.post('/api/robots/:robotId/test', requireAuth, requireRole('admin'), async (
         res.status(500).json({ success: false, error: message });
     }
 });
+// 查询机器人运行日志（内存，最多 200 条，倒序）
+app.get('/api/robots/:robotId/logs', requireAuth, requireRole('admin'), (req, res) => {
+    const { robotId } = req.params;
+    const logs = botLogs.get(robotId) ?? [];
+    res.json({ success: true, data: [...logs].reverse() });
+});
 // 获取机器人所在的飞书群列表（调用飞书 im/v1/chats API，返回机器人实际加入的群）
 app.get('/api/robots/:robotId/chats', requireAuth, requireRole('admin'), async (req, res) => {
     const { robotId } = req.params;
@@ -1274,12 +1290,92 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
     catch {
         text = contentRaw;
     }
+    // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
+    const primaryRobot = matchedRobots[0];
+    // 写入"收到消息"日志
+    const inLogId = nanoid();
+    pushBotLog({
+        id: inLogId,
+        robotId: primaryRobot.id,
+        time: new Date().toISOString(),
+        direction: 'in',
+        senderOpenId,
+        chatId,
+        rawText: text,
+        status: 'ok'
+    });
     const parserModel = resolveParserModelConfig();
-    const action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
+    let action;
+    try {
+        action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
+    }
+    catch (err) {
+        // AI 调用失败，更新入站日志状态，发送失败卡片
+        const list = botLogs.get(primaryRobot.id);
+        const inLog = list?.find((l) => l.id === inLogId);
+        if (inLog) {
+            inLog.status = 'failed';
+            inLog.error = err instanceof Error ? err.message : 'AI 调用失败';
+        }
+        try {
+            const msgId = await sendRobotCard({
+                title: '⚠️ 消息识别失败',
+                lines: [
+                    `**原始消息**：${text}`,
+                    `**失败原因**：AI 模型调用异常，请检查模型配置`
+                ],
+                color: 'red'
+            }, chatId);
+            pushBotLog({
+                id: nanoid(),
+                robotId: primaryRobot.id,
+                time: new Date().toISOString(),
+                direction: 'out',
+                chatId,
+                messageId: msgId,
+                msgType: 'interactive',
+                cardTitle: '⚠️ 消息识别失败',
+                status: 'ok'
+            });
+        }
+        catch { /* 通知失败不抛出 */ }
+        throw err;
+    }
     // LLM 调用后异步刷新余额，不阻塞主流程
     void checkModelBalances();
-    if (action.intent === 'unknown')
+    // 更新入站日志的识别意图
+    const list = botLogs.get(primaryRobot.id);
+    const inLog = list?.find((l) => l.id === inLogId);
+    if (inLog)
+        inLog.intent = action.intent;
+    if (action.intent === 'unknown') {
+        if (inLog)
+            inLog.status = 'unrecognized';
+        // 发送识别失败反馈卡片
+        try {
+            const msgId = await sendRobotCard({
+                title: '❓ 指令无法识别',
+                lines: [
+                    `**原始消息**：${text}`,
+                    `**提示**：支持的操作包括调整零花钱额度、设置奖励、扣除消费、修改周报时间`
+                ],
+                color: 'orange'
+            }, chatId);
+            pushBotLog({
+                id: nanoid(),
+                robotId: primaryRobot.id,
+                time: new Date().toISOString(),
+                direction: 'out',
+                chatId,
+                messageId: msgId,
+                msgType: 'interactive',
+                cardTitle: '❓ 指令无法识别',
+                status: 'ok'
+            });
+        }
+        catch { /* 通知失败不阻断 */ }
         return null;
+    }
     const robot = pickRobotForAction(matchedRobots, action.childName);
     if (!robot)
         return null;
@@ -1298,7 +1394,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 child.dailyAllowance = action.amount;
                 child.updatedAt = new Date().toISOString();
             });
-            await sendRobotCard({
+            const msgId = await sendRobotCard({
                 title: '系统操作反馈：每日额度调整',
                 lines: [
                     `**识别结果**：成功`,
@@ -1306,6 +1402,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     `**每日零花钱总金额**：${amountYuan(action.amount)}`
                 ]
             }, chatId, targetChild.id);
+            pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每日额度调整', status: 'ok' });
             break;
         }
         case 'set_reward_rule': {
@@ -1324,7 +1421,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
                 child.rewardRules.push(rule);
             });
-            await sendRobotCard({
+            const msgId = await sendRobotCard({
                 title: '系统操作反馈：额外奖励设置',
                 lines: [
                     `**识别结果**：成功`,
@@ -1333,6 +1430,7 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                     `**奖励金额**：${amountYuan(action.amount)}`
                 ]
             }, chatId, targetChild.id);
+            pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：额外奖励设置', status: 'ok' });
             break;
         }
         case 'deduct_expense': {
@@ -1358,13 +1456,14 @@ async function processBotMessage(senderOpenId, senderType, messageType, contentR
                 };
             });
             scheduler.updateWeeklySchedule(action.hour, action.minute);
-            await sendRobotCard({
+            const msgId = await sendRobotCard({
                 title: '系统操作反馈：每周统计通知',
                 lines: [
                     `**识别结果**：成功`,
                     `**通知时间**：每周一 ${String(action.hour).padStart(2, '0')}:${String(action.minute).padStart(2, '0')}`
                 ]
             }, chatId);
+            pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每周统计通知', status: 'ok' });
             break;
         }
         case 'reward_from_message': {
