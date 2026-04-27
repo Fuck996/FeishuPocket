@@ -2,7 +2,7 @@ version: '3.9'
 services:
   app:
     container_name: feishu-pocket
-    image: ghcr.io/${IMAGE_NAMESPACE:-Fuck996}/feishu-pocket:${IMAGE_TAG:-v0.2.1}
+    image: ghcr.io/${IMAGE_NAMESPACE:-fuck996}/feishu-pocket:${IMAGE_TAG:-v0.2.1}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-45174}:3000"
