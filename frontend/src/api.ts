@@ -1,4 +1,4 @@
-import { ChildProfile, RobotConfig, UserInfo, WeeklySummary, ModelConfig, PromptTemplate, SystemConfig } from './types';
+import { ChildProfile, MoneyTransaction, RobotConfig, UserInfo, WeeklySummary, ModelConfig, PromptTemplate, SystemConfig } from './types';
 
 const TOKEN_KEY = 'fp_token';
 
@@ -91,6 +91,19 @@ export async function createChild(payload: { name: string; avatar?: string; dail
   });
 }
 
+export async function updateChild(childId: string, payload: { name?: string; avatar?: string }): Promise<void> {
+  await request(`/api/children/${childId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteChild(childId: string): Promise<void> {
+  await request(`/api/children/${childId}`, {
+    method: 'DELETE'
+  });
+}
+
 export async function adjustChild(childId: string, payload: { amount: number; reason: string }): Promise<void> {
   await request(`/api/children/${childId}/adjust`, {
     method: 'POST',
@@ -164,8 +177,8 @@ export async function deleteRobot(robotId: string): Promise<void> {
   });
 }
 
-export async function getTransactions(): Promise<Array<{ id: string; childId: string; amount: number; reason: string; createdAt: string }>> {
-  const result = await request<{ success: true; data: Array<{ id: string; childId: string; amount: number; reason: string; createdAt: string }> }>('/api/transactions');
+export async function getTransactions(): Promise<MoneyTransaction[]> {
+  const result = await request<{ success: true; data: MoneyTransaction[] }>('/api/transactions');
   return result.data;
 }
 

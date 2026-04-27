@@ -1,3 +1,13 @@
+function buildChatCompletionsEndpoint(baseUrl) {
+    const normalized = (baseUrl ?? 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+    if (normalized.endsWith('/v1')) {
+        return `${normalized}/chat/completions`;
+    }
+    if (normalized.includes('api.deepseek.com') || normalized.includes('api.openai.com')) {
+        return `${normalized}/v1/chat/completions`;
+    }
+    return `${normalized}/chat/completions`;
+}
 function extractJsonObject(content) {
     const trimmed = content.trim();
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
@@ -89,7 +99,7 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
         return parseByRegex(message);
     }
     try {
-        const endpoint = `${openAiBaseUrl ?? 'https://api.openai.com/v1'}/chat/completions`;
+        const endpoint = buildChatCompletionsEndpoint(openAiBaseUrl);
         const prompt = `你是一个家庭零花钱系统指令解析器。
 请只返回 JSON 对象，不要代码块，不要额外解释。
 字段: intent, childName, amount, rewardKeyword, reason, hour, minute。

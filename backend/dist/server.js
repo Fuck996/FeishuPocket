@@ -17,7 +17,39 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
-const jwtSecret = process.env.JWT_SECRET ?? 'change-this-in-production';
+// JWT Secret 完全自动化处理
+// 优先级：持久化文件 > 首次启动自动生成
+// 无需环保变量配置，容器重启后密钥保持不变
+function initializeJwtSecret() {
+    const jwtSecretPath = path.resolve(__dirname, '../data/.jwt-secret');
+    // 1. 读取持久化文件（容器重启时复用）
+    try {
+        if (fs.existsSync(jwtSecretPath)) {
+            const secret = fs.readFileSync(jwtSecretPath, 'utf-8').trim();
+            console.log('[Init] Loaded persisted JWT secret from .jwt-secret');
+            return secret;
+        }
+    }
+    catch (error) {
+        console.warn('[Warn] Failed to read .jwt-secret file:', error);
+    }
+    // 2. 首次启动，自动生成新密钥
+    try {
+        const secret = crypto.randomBytes(32).toString('base64');
+        fs.mkdirSync(path.dirname(jwtSecretPath), { recursive: true });
+        fs.writeFileSync(jwtSecretPath, secret, { mode: 0o600 });
+        console.log('[Init] Generated new JWT secret and persisted to .jwt-secret');
+        return secret;
+    }
+    catch (error) {
+        console.error('[ERROR] Failed to generate JWT secret:', error);
+        // 紧急兜底方案（仅在持久化失败时使用）
+        const fallback = 'fallback-' + crypto.randomBytes(16).toString('hex');
+        console.warn('[ERROR] Using temporary fallback secret, tokens may not persist across restarts');
+        return fallback;
+    }
+}
+const jwtSecret = initializeJwtSecret();
 const databasePath = process.env.DATABASE_PATH ?? path.resolve(__dirname, '../data/store.json');
 const frontendDistPath = path.resolve(__dirname, '../public');
 const store = new JsonStore(databasePath);
@@ -42,7 +74,7 @@ function safeEqual(left, right) {
     return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 function verifyFeishuToken(body) {
-    const verifyToken = process.env.FEISHU_VERIFICATION_TOKEN;
+    const verifyToken = store.getSnapshot().config.feishuVerificationToken ?? process.env.FEISHU_VERIFICATION_TOKEN;
     if (!verifyToken) {
         return true;
     }
@@ -54,7 +86,7 @@ function verifyFeishuToken(body) {
     return safeEqual(verifyToken, tokenInBody);
 }
 function verifyFeishuSignature(req) {
-    const secret = process.env.FEISHU_SIGNING_SECRET;
+    const secret = store.getSnapshot().config.feishuSigningSecret ?? process.env.FEISHU_SIGNING_SECRET;
     if (!secret) {
         return true;
     }
@@ -83,6 +115,7 @@ function extractFeishuEvent(reqBody) {
         body.open_id;
     const senderType = sender.sender_type ?? sender.type;
     const messageType = message.message_type ?? message.type;
+    const chatId = message.chat_id ?? event.chat?.chat_id;
     const contentField = message.content;
     let contentRaw;
     if (typeof contentField === 'string') {
@@ -98,8 +131,30 @@ function extractFeishuEvent(reqBody) {
         senderOpenId,
         senderType,
         messageType,
-        contentRaw
+        contentRaw,
+        chatId
     };
+}
+function resolveFeishuSendTarget(chatIdOverride) {
+    const config = store.getSnapshot().config;
+    const mode = config.feishuMode ?? 'app';
+    const resolvedChatId = chatIdOverride ?? config.feishuDefaultChatId ?? config.lastActiveChatId;
+    if (mode === 'webhook') {
+        return {
+            mode,
+            webhookUrl: config.feishuWebhookUrl
+        };
+    }
+    return {
+        mode,
+        appId: config.feishuAppId,
+        appSecret: config.feishuAppSecret,
+        chatId: resolvedChatId,
+        webhookUrl: config.feishuWebhookUrl
+    };
+}
+async function sendRobotCard(payload, chatIdOverride) {
+    await sendFeishuCard(resolveFeishuSendTarget(chatIdOverride), payload);
 }
 function sanitizeUser(user) {
     return {
@@ -137,6 +192,68 @@ function inferSuggestion(increasedAmount, expenseAmount, remainingAmount) {
         return '本周结余较高，可以设立一个小目标，把结余分成储蓄和奖励两部分。';
     }
     return '本周消费与收入较平衡，建议继续保持，并记录高频消费原因。';
+}
+function normalizeApiUrl(provider, apiUrl) {
+    const trimmed = apiUrl.trim().replace(/\/+$/, '');
+    if ((provider === 'deepseek' || provider === 'openai') && trimmed.endsWith('/v1')) {
+        return trimmed.slice(0, -3);
+    }
+    return trimmed;
+}
+function buildModelListEndpoint(provider, apiUrl) {
+    const normalized = normalizeApiUrl(provider, apiUrl);
+    if (provider === 'google') {
+        return `${normalized}/v1beta/models`;
+    }
+    if (provider === 'deepseek' || provider === 'openai') {
+        return `${normalized}/v1/models`;
+    }
+    return `${normalized}/models`;
+}
+async function discoverProviderModels(provider, apiUrl, apiKey) {
+    const endpoint = buildModelListEndpoint(provider, apiUrl);
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (provider === 'google') {
+        headers['x-goog-api-key'] = apiKey;
+    }
+    else {
+        headers.Authorization = `Bearer ${apiKey}`;
+    }
+    const response = await fetch(endpoint, { method: 'GET', headers });
+    if (!response.ok) {
+        throw new Error(`模型列表获取失败 (${response.status})`);
+    }
+    const data = (await response.json());
+    const list = provider === 'google'
+        ? (data.models ?? []).map((item) => String(item.name ?? '').replace(/^models\//, '').trim())
+        : (data.data ?? []).map((item) => String(item.id ?? '').trim());
+    return Array.from(new Set(list.filter(Boolean))).sort((left, right) => left.localeCompare(right));
+}
+function resolveParserModelConfig() {
+    const models = store.getAllModels();
+    const preferredDeepSeek = models.find((item) => item.provider === 'deepseek' && item.isBuiltIn && item.apiKey && item.modelId);
+    if (preferredDeepSeek) {
+        return {
+            apiKey: preferredDeepSeek.apiKey,
+            apiUrl: normalizeApiUrl(preferredDeepSeek.provider, preferredDeepSeek.apiUrl),
+            modelId: preferredDeepSeek.modelId
+        };
+    }
+    const fallback = models.find((item) => item.apiKey && item.modelId);
+    if (fallback) {
+        return {
+            apiKey: fallback.apiKey,
+            apiUrl: normalizeApiUrl(fallback.provider, fallback.apiUrl),
+            modelId: fallback.modelId
+        };
+    }
+    return {
+        apiKey: process.env.OPENAI_API_KEY,
+        apiUrl: process.env.OPENAI_BASE_URL,
+        modelId: process.env.OPENAI_MODEL
+    };
 }
 function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -197,7 +314,8 @@ async function applyTransaction(input) {
         targetChild.updatedAt = new Date().toISOString();
         draft.transactions.push(transaction);
     });
-    await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+    // 从数据库读取飞书 webhook，而非环境变量
+    await sendRobotCard({
         title: '零花钱金额变动通知',
         lines: [
             `**对象**：${child.name}`,
@@ -212,30 +330,63 @@ async function applyTransaction(input) {
     }
     return { child: updated, transaction };
 }
-function getDefaultChildForUser(user) {
+function getDefaultChildForRobot(robot) {
     const snapshot = store.getSnapshot();
-    if (user.role === 'admin') {
-        return snapshot.children[0];
-    }
-    const firstId = user.childIds[0];
+    const firstId = robot.childIds[0];
     if (!firstId) {
         return undefined;
     }
     return snapshot.children.find((item) => item.id === firstId);
 }
-function resolveChildFromAction(action, user) {
+function canRobotManageChild(robot, childId) {
+    return robot.childIds.includes(childId);
+}
+function resolveChildFromAction(action, robot) {
     const snapshot = store.getSnapshot();
     if (action.childName) {
         const found = snapshot.children.find((item) => item.name === action.childName);
         if (!found) {
             return undefined;
         }
-        if (!canManageChild(user, found.id)) {
+        if (!canRobotManageChild(robot, found.id)) {
             return undefined;
         }
         return found;
     }
-    return getDefaultChildForUser(user);
+    return getDefaultChildForRobot(robot);
+}
+function normalizeStringArray(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean)));
+}
+function resolveMatchedRobots(senderOpenId, chatId) {
+    return store.getSnapshot().robots.filter((robot) => {
+        if (!robot.enabled) {
+            return false;
+        }
+        if (!robot.controllerOpenIds.includes(senderOpenId)) {
+            return false;
+        }
+        if (robot.allowedChatIds.length === 0) {
+            return true;
+        }
+        return !!chatId && robot.allowedChatIds.includes(chatId);
+    });
+}
+function pickRobotForAction(robots, childName) {
+    if (robots.length <= 1) {
+        return robots[0];
+    }
+    if (!childName) {
+        return robots[0];
+    }
+    const child = store.getSnapshot().children.find((item) => item.name === childName);
+    if (!child) {
+        return robots[0];
+    }
+    return robots.find((robot) => robot.childIds.includes(child.id)) ?? robots[0];
 }
 async function runDailyGrant() {
     const snapshot = store.getSnapshot();
@@ -305,7 +456,7 @@ async function runWeeklySummary() {
         store.update((draft) => {
             draft.weeklySummaries.push(summary);
         });
-        await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+        await sendRobotCard({
             title: `${child.name}上周零花钱统计`,
             lines: [
                 `**统计周期**：${range.startText} ~ ${range.endText}`,
@@ -333,11 +484,17 @@ const scheduler = new SchedulerService({
     checkModelBalances
 }, snapshot.config.weeklyNotify.hour, snapshot.config.weeklyNotify.minute);
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.2.1' });
+    res.json({ success: true, version: '0.2.3' });
+});
+app.get('/api/setup-status', (_req, res) => {
+    const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
+    res.json({ success: true, data: { adminInitialized } });
 });
 app.post('/api/init-admin', async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) {
+    const normalizedUsername = username?.trim();
+    const normalizedPassword = password ?? '';
+    if (!normalizedUsername || !normalizedPassword) {
         res.status(400).json({ success: false, error: '用户名和密码必填' });
         return;
     }
@@ -348,8 +505,8 @@ app.post('/api/init-admin', async (req, res) => {
     const now = new Date().toISOString();
     const admin = {
         id: nanoid(),
-        username,
-        passwordHash: await hashPassword(password),
+        username: normalizedUsername,
+        passwordHash: await hashPassword(normalizedPassword),
         role: 'admin',
         childIds: [],
         createdAt: now,
@@ -362,16 +519,18 @@ app.post('/api/init-admin', async (req, res) => {
 });
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) {
+    const normalizedUsername = username?.trim();
+    const normalizedPassword = password ?? '';
+    if (!normalizedUsername || !normalizedPassword) {
         res.status(400).json({ success: false, error: '用户名和密码必填' });
         return;
     }
-    const user = store.getSnapshot().users.find((item) => item.username === username);
+    const user = store.getSnapshot().users.find((item) => item.username === normalizedUsername);
     if (!user) {
         res.status(401).json({ success: false, error: '账号或密码错误' });
         return;
     }
-    const matched = await comparePassword(password, user.passwordHash);
+    const matched = await comparePassword(normalizedPassword, user.passwordHash);
     if (!matched) {
         res.status(401).json({ success: false, error: '账号或密码错误' });
         return;
@@ -538,6 +697,107 @@ app.delete('/api/operators/:userId', requireAuth, requireRole('admin'), (req, re
     });
     res.json({ success: true, message: '删除成功' });
 });
+app.get('/api/robots', requireAuth, requireRole('admin'), (_req, res) => {
+    res.json({ success: true, data: store.getSnapshot().robots });
+});
+app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
+    const { name, enabled, childIds, controllerOpenIds, allowedChatIds } = req.body;
+    const normalizedName = String(name ?? '').trim();
+    const normalizedChildIds = normalizeStringArray(childIds);
+    const normalizedControllerOpenIds = normalizeStringArray(controllerOpenIds);
+    const normalizedAllowedChatIds = normalizeStringArray(allowedChatIds);
+    if (!normalizedName) {
+        res.status(400).json({ success: false, error: '机器人名称必填' });
+        return;
+    }
+    if (normalizedChildIds.length === 0) {
+        res.status(400).json({ success: false, error: '至少绑定一个小孩' });
+        return;
+    }
+    if (normalizedControllerOpenIds.length === 0) {
+        res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
+        return;
+    }
+    const now = new Date().toISOString();
+    const robot = {
+        id: nanoid(),
+        name: normalizedName,
+        enabled: enabled !== false,
+        childIds: normalizedChildIds,
+        controllerOpenIds: normalizedControllerOpenIds,
+        allowedChatIds: normalizedAllowedChatIds,
+        createdAt: now,
+        updatedAt: now
+    };
+    store.update((draft) => {
+        draft.robots.push(robot);
+    });
+    res.json({ success: true, data: robot });
+});
+app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
+    const { robotId } = req.params;
+    const { name, enabled, childIds, controllerOpenIds, allowedChatIds } = req.body;
+    const exists = store.getSnapshot().robots.some((item) => item.id === robotId);
+    if (!exists) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    const normalizedName = name === undefined ? undefined : String(name).trim();
+    const normalizedChildIds = childIds === undefined ? undefined : normalizeStringArray(childIds);
+    const normalizedControllerOpenIds = controllerOpenIds === undefined ? undefined : normalizeStringArray(controllerOpenIds);
+    const normalizedAllowedChatIds = allowedChatIds === undefined ? undefined : normalizeStringArray(allowedChatIds);
+    if (normalizedName !== undefined && !normalizedName) {
+        res.status(400).json({ success: false, error: '机器人名称不能为空' });
+        return;
+    }
+    if (normalizedChildIds !== undefined && normalizedChildIds.length === 0) {
+        res.status(400).json({ success: false, error: '至少绑定一个小孩' });
+        return;
+    }
+    if (normalizedControllerOpenIds !== undefined && normalizedControllerOpenIds.length === 0) {
+        res.status(400).json({ success: false, error: '至少绑定一个控制账号 OpenID' });
+        return;
+    }
+    let updatedRobot;
+    store.update((draft) => {
+        const robot = draft.robots.find((item) => item.id === robotId);
+        if (!robot) {
+            return;
+        }
+        if (normalizedName !== undefined) {
+            robot.name = normalizedName;
+        }
+        if (enabled !== undefined) {
+            robot.enabled = enabled;
+        }
+        if (normalizedChildIds !== undefined) {
+            robot.childIds = normalizedChildIds;
+        }
+        if (normalizedControllerOpenIds !== undefined) {
+            robot.controllerOpenIds = normalizedControllerOpenIds;
+        }
+        if (normalizedAllowedChatIds !== undefined) {
+            robot.allowedChatIds = normalizedAllowedChatIds;
+        }
+        robot.updatedAt = new Date().toISOString();
+        updatedRobot = robot;
+    });
+    res.json({ success: true, data: updatedRobot });
+});
+app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
+    const { robotId } = req.params;
+    let removed = false;
+    store.update((draft) => {
+        const before = draft.robots.length;
+        draft.robots = draft.robots.filter((item) => item.id !== robotId);
+        removed = before !== draft.robots.length;
+    });
+    if (!removed) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    res.json({ success: true, message: '机器人已删除' });
+});
 app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async (req, res) => {
     const { childId, amount } = req.body;
     if (!childId || amount === undefined || amount < 0) {
@@ -553,7 +813,8 @@ app.put('/api/config/daily-allowance', requireAuth, requireRole('admin'), async 
         child.updatedAt = new Date().toISOString();
     });
     const child = findChildById(childId);
-    await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+    // 从数据库读取飞书 webhook，而非环境变量
+    await sendRobotCard({
         title: '系统操作反馈：每日零花钱额度',
         lines: [
             `**识别结果**：成功`,
@@ -585,7 +846,8 @@ app.put('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req
         child.updatedAt = new Date().toISOString();
     });
     const child = findChildById(childId);
-    await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+    // 从数据库读取飞书 webhook，而非环境变量
+    await sendRobotCard({
         title: '系统操作反馈：额外奖励规则',
         lines: [
             `**识别结果**：成功`,
@@ -606,7 +868,8 @@ app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (r
         draft.config.weeklyNotify = { hour: Number(hour), minute: Number(minute) };
     });
     scheduler.updateWeeklySchedule(Number(hour), Number(minute));
-    await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+    // 从数据库读取飞书 webhook，而非环境变量
+    await sendRobotCard({
         title: '系统操作反馈：每周统计通知',
         lines: [
             `**识别结果**：成功`,
@@ -618,13 +881,44 @@ app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (r
 app.get('/api/config', requireAuth, (_req, res) => {
     res.json({ success: true, data: store.getSnapshot().config });
 });
+/**
+ * PUT /api/config/system
+ * 由管理员在 UI 中配置系统级参数
+ */
+app.put('/api/config/system', requireAuth, requireRole('admin'), (req, res) => {
+    const { feishuMode, feishuWebhookUrl, feishuAppId, feishuAppSecret, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
+    store.update((draft) => {
+        if (feishuMode !== undefined) {
+            draft.config.feishuMode = feishuMode;
+        }
+        if (feishuWebhookUrl !== undefined) {
+            draft.config.feishuWebhookUrl = feishuWebhookUrl;
+        }
+        if (feishuAppId !== undefined) {
+            draft.config.feishuAppId = feishuAppId;
+        }
+        if (feishuAppSecret !== undefined) {
+            draft.config.feishuAppSecret = feishuAppSecret;
+        }
+        if (feishuVerificationToken !== undefined) {
+            draft.config.feishuVerificationToken = feishuVerificationToken;
+        }
+        if (feishuSigningSecret !== undefined) {
+            draft.config.feishuSigningSecret = feishuSigningSecret;
+        }
+        if (feishuDefaultChatId !== undefined) {
+            draft.config.feishuDefaultChatId = feishuDefaultChatId;
+        }
+    });
+    res.json({ success: true, message: '系统配置已更新' });
+});
 app.get('/api/transactions', requireAuth, (req, res) => {
     const user = req.authUser;
     const all = store.getSnapshot().transactions;
     const list = user.role === 'admin'
         ? all
         : all.filter((item) => user.childIds.includes(item.childId));
-    res.json({ success: true, data: list.slice(-200).reverse() });
+    res.json({ success: true, data: [...list].reverse() });
 });
 app.get('/api/weekly-summaries', requireAuth, (req, res) => {
     const user = req.authUser;
@@ -634,7 +928,7 @@ app.get('/api/weekly-summaries', requireAuth, (req, res) => {
         : all.filter((item) => user.childIds.includes(item.childId));
     res.json({ success: true, data: list.slice(-50).reverse() });
 });
-app.post('/api/feishu/webhook', async (req, res) => {
+app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
     if (!verifyFeishuToken(req.body)) {
         res.status(401).json({ success: false, error: '飞书 token 校验失败' });
         return;
@@ -648,7 +942,12 @@ app.post('/api/feishu/webhook', async (req, res) => {
         res.json({ challenge: body.challenge ?? '' });
         return;
     }
-    const { senderOpenId, senderType, messageType, contentRaw } = extractFeishuEvent(req.body);
+    const { senderOpenId, senderType, messageType, contentRaw, chatId } = extractFeishuEvent(req.body);
+    if (chatId) {
+        store.update((draft) => {
+            draft.config.lastActiveChatId = chatId;
+        });
+    }
     const eventType = body?.header?.event_type;
     if (eventType && eventType !== 'im.message.receive_v1') {
         res.json({ success: true, ignored: true, reason: 'unsupported_event_type' });
@@ -666,9 +965,9 @@ app.post('/api/feishu/webhook', async (req, res) => {
         res.json({ success: true, ignored: true, reason: 'ignored_sender' });
         return;
     }
-    const user = store.getSnapshot().users.find((item) => item.boundFeishuUserId === senderOpenId);
-    if (!user) {
-        res.json({ success: true, ignored: true, reason: 'unbound_sender' });
+    const matchedRobots = resolveMatchedRobots(senderOpenId, chatId);
+    if (matchedRobots.length === 0) {
+        res.json({ success: true, ignored: true, reason: 'unbound_robot_or_sender' });
         return;
     }
     let text = '';
@@ -679,22 +978,24 @@ app.post('/api/feishu/webhook', async (req, res) => {
     catch {
         text = contentRaw;
     }
-    const action = await parseBotAction(text, process.env.OPENAI_API_KEY, process.env.OPENAI_BASE_URL, process.env.OPENAI_MODEL);
+    const parserModel = resolveParserModelConfig();
+    const action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
     if (action.intent === 'unknown') {
         res.json({ success: true, ignored: true, reason: 'unrecognized' });
         return;
     }
-    const targetChild = resolveChildFromAction(action, user);
+    const robot = pickRobotForAction(matchedRobots, action.childName);
+    if (!robot) {
+        res.json({ success: true, ignored: true, reason: 'robot_not_resolved' });
+        return;
+    }
+    const targetChild = resolveChildFromAction(action, robot);
     if (!targetChild && action.intent !== 'set_weekly_notify') {
         res.status(400).json({ success: false, error: '未找到目标小孩或无权限' });
         return;
     }
     switch (action.intent) {
         case 'set_daily_allowance': {
-            if (user.role !== 'admin') {
-                res.status(403).json({ success: false, error: '仅管理员可调整每日额度' });
-                return;
-            }
             if (!targetChild || action.amount === undefined) {
                 res.status(400).json({ success: false, error: '缺少参数' });
                 return;
@@ -707,21 +1008,17 @@ app.post('/api/feishu/webhook', async (req, res) => {
                 child.dailyAllowance = action.amount;
                 child.updatedAt = new Date().toISOString();
             });
-            await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+            await sendRobotCard({
                 title: '系统操作反馈：每日额度调整',
                 lines: [
                     `**识别结果**：成功`,
                     `**对象**：${targetChild.name}`,
                     `**每日零花钱总金额**：${amountYuan(action.amount)}`
                 ]
-            });
+            }, chatId);
             break;
         }
         case 'set_reward_rule': {
-            if (user.role !== 'admin') {
-                res.status(403).json({ success: false, error: '仅管理员可设置奖励项目' });
-                return;
-            }
             if (!targetChild || !action.rewardKeyword || action.amount === undefined) {
                 res.status(400).json({ success: false, error: '缺少参数' });
                 return;
@@ -740,7 +1037,7 @@ app.post('/api/feishu/webhook', async (req, res) => {
                 child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
                 child.rewardRules.push(rule);
             });
-            await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+            await sendRobotCard({
                 title: '系统操作反馈：额外奖励设置',
                 lines: [
                     `**识别结果**：成功`,
@@ -748,7 +1045,7 @@ app.post('/api/feishu/webhook', async (req, res) => {
                     `**奖励项目**：${action.rewardKeyword}`,
                     `**奖励金额**：${amountYuan(action.amount)}`
                 ]
-            });
+            }, chatId);
             break;
         }
         case 'deduct_expense': {
@@ -763,15 +1060,11 @@ app.post('/api/feishu/webhook', async (req, res) => {
                 reason: action.reason ?? '消费',
                 type: 'expense',
                 source: 'bot',
-                actorUserId: user.id
+                actorUserId: undefined
             });
             break;
         }
         case 'set_weekly_notify': {
-            if (user.role !== 'admin') {
-                res.status(403).json({ success: false, error: '仅管理员可设置周报时间' });
-                return;
-            }
             if (action.hour === undefined || action.minute === undefined) {
                 res.status(400).json({ success: false, error: '缺少时间参数' });
                 return;
@@ -783,13 +1076,13 @@ app.post('/api/feishu/webhook', async (req, res) => {
                 };
             });
             scheduler.updateWeeklySchedule(action.hour, action.minute);
-            await sendFeishuCard(process.env.FEISHU_WEBHOOK_URL, {
+            await sendRobotCard({
                 title: '系统操作反馈：每周统计通知',
                 lines: [
                     `**识别结果**：成功`,
                     `**通知时间**：每周一 ${String(action.hour).padStart(2, '0')}:${String(action.minute).padStart(2, '0')}`
                 ]
-            });
+            }, chatId);
             break;
         }
         case 'reward_from_message': {
@@ -809,7 +1102,7 @@ app.post('/api/feishu/webhook', async (req, res) => {
                 reason: action.reason ?? `完成${reward.keyword}`,
                 type: 'reward',
                 source: 'bot',
-                actorUserId: user.id
+                actorUserId: undefined
             });
             break;
         }
@@ -848,6 +1141,28 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
     });
 });
 // ===== Model Config APIs =====
+app.post('/api/models/discover', requireAuth, requireRole('admin'), async (req, res) => {
+    const { provider, apiUrl, apiKey } = req.body;
+    if (!provider || !apiUrl || !apiKey) {
+        res.status(400).json({ success: false, error: 'provider、apiUrl、apiKey 必填' });
+        return;
+    }
+    if (!['deepseek', 'openai', 'google', 'custom'].includes(provider)) {
+        res.status(400).json({ success: false, error: '不支持的 provider' });
+        return;
+    }
+    try {
+        const models = await discoverProviderModels(provider, apiUrl, apiKey);
+        if (models.length === 0) {
+            res.status(400).json({ success: false, error: '成功连接但未获取到模型列表' });
+            return;
+        }
+        res.json({ success: true, data: models });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: error instanceof Error ? error.message : '获取模型列表失败' });
+    }
+});
 app.get('/api/models', requireAuth, (req, res) => {
     const models = store.getAllModels();
     // 脱敏 API Key
@@ -962,6 +1277,17 @@ app.delete('/api/prompts/:id', requireAuth, requireRole('admin'), (req, res) => 
     else {
         res.status(404).json({ success: false, error: '提示词模板不存在' });
     }
+});
+app.use((error, req, res, next) => {
+    if (!req.path.startsWith('/api/')) {
+        next(error);
+        return;
+    }
+    console.error('[API ERROR]', error);
+    res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : '服务器内部错误'
+    });
 });
 if (fs.existsSync(frontendDistPath)) {
     app.get('*', (req, res, next) => {

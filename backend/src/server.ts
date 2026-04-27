@@ -607,7 +607,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.2' });
+  res.json({ success: true, version: '0.2.3' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1150,7 +1150,7 @@ app.get('/api/transactions', requireAuth, (req: AuthedRequest, res) => {
   const list = user.role === 'admin'
     ? all
     : all.filter((item) => user.childIds.includes(item.childId));
-  res.json({ success: true, data: list.slice(-200).reverse() });
+  res.json({ success: true, data: [...list].reverse() });
 });
 
 app.get('/api/weekly-summaries', requireAuth, (req: AuthedRequest, res) => {

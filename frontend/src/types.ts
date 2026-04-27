@@ -15,6 +15,16 @@ export interface ChildProfile {
   rewardRules: Array<{ id: string; keyword: string; amount: number }>;
 }
 
+export interface MoneyTransaction {
+  id: string;
+  childId: string;
+  amount: number;
+  reason: string;
+  type: 'daily' | 'reward' | 'expense' | 'manual';
+  source: 'admin' | 'operator' | 'bot' | 'schedule' | 'mcp';
+  createdAt: string;
+}
+
 export interface WeeklySummary {
   id: string;
   childId: string;
