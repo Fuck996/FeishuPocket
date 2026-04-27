@@ -270,12 +270,10 @@ function parsePreciseBotCommand(text: string): ParsedBotAction | null {
     return { intent: 'show_help' };
   }
 
-  // 1) 发放零花钱（可选指定孩子）
-  const manualGrant = normalized.match(/^发放零花钱(?:\s*[：:]\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12}))?$/);
-  if (manualGrant) {
+  // 1) 发放零花钱（精确指令不接收孩子名，默认按机器人绑定孩子执行）
+  if (/^发放零花钱$/.test(normalized)) {
     return {
-      intent: 'manual_grant_daily_allowance',
-      childName: manualGrant[1]
+      intent: 'manual_grant_daily_allowance'
     };
   }
 
@@ -1123,7 +1121,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.16' });
+  res.json({ success: true, version: '0.3.17' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
