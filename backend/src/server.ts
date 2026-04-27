@@ -607,7 +607,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.3' });
+  res.json({ success: true, version: '0.2.4' });
 });
 
 app.get('/api/setup-status', (_req, res) => {

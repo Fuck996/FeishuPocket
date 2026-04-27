@@ -499,8 +499,8 @@ button:disabled {
 .fab-button {
   position: fixed;
   right: calc((100vw - min(100vw, 460px)) / 2 + 22px);
-  bottom: 98px;
-  z-index: 8;
+  bottom: 122px;
+  z-index: 14;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -610,12 +610,24 @@ button:disabled {
 
 .bottom-nav__item {
   flex-direction: column;
+  align-items: center;
   justify-content: center;
   gap: 6px;
   min-height: 62px;
   border-radius: 18px;
   padding: 10px 8px;
   font-size: 12px;
+}
+
+.bottom-nav__item svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.bottom-nav__label {
+  display: block;
+  line-height: 1;
+  text-align: center;
 }
 
 .bottom-nav__item.is-active {

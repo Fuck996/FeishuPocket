@@ -145,6 +145,21 @@ function getTransactionTypeLabel(type: MoneyTransaction['type']): string {
   }
 }
 
+function getModelStatusLabel(status: ModelConfig['status']): string {
+  switch (status) {
+    case 'connected':
+      return '已连接';
+    case 'testing':
+      return '测试中';
+    case 'disconnected':
+      return '已断开';
+    case 'unconfigured':
+      return '未配置';
+    default:
+      return '未知状态';
+  }
+}
+
 function createEmptyRobotDraft(): RobotDraft {
   return {
     name: '',
@@ -1028,7 +1043,7 @@ function App() {
                   <article className="list-card" key={model.id}>
                     <div>
                       <div className="list-card__title">{model.name}</div>
-                      <div className="list-card__meta">{model.provider} · {model.modelId || '未设置模型 ID'} · {model.status}</div>
+                      <div className="list-card__meta">{model.provider} · {model.modelId || '未设置模型 ID'} · {getModelStatusLabel(model.status)}</div>
                     </div>
                     <div className="list-card__actions">
                       <button
@@ -1669,7 +1684,7 @@ function App() {
           return (
             <button key={item.key} type="button" className={`bottom-nav__item ${active ? 'is-active' : ''}`} onClick={() => setActiveTab(item.key)}>
               <AppIcon name={item.icon} size={20} />
-              <span>{item.label}</span>
+              <span className="bottom-nav__label">{item.label}</span>
             </button>
           );
         })}
