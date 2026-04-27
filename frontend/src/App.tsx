@@ -95,12 +95,31 @@ const NAV_ITEMS: Array<{ key: NavTab; label: string; icon: string }> = [
   { key: 'children', label: '孩子', icon: 'child' }
 ];
 
-function fileToDataUrl(file: File): Promise<string> {
+function compressImage(file: File, maxSide = 280, quality = 0.82): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ''));
-    reader.onerror = () => reject(new Error('头像读取失败，请重试'));
-    reader.readAsDataURL(file);
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('无法创建图像处理上下文'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('头像读取失败，请重试'));
+    };
+    img.src = url;
   });
 }
 
@@ -808,7 +827,7 @@ function App() {
     }
   }
 
-  async function handleSaveMcpServices(event: FormEvent): Promise<void> {
+  async function handleSaveFeishuConfig(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (!user) {
       return;
@@ -826,9 +845,22 @@ function App() {
       };
 
       await updateSystemConfig(payload);
-      await setWeeklyNotify(notifyHour, notifyMinute);
       await reloadData(user);
-      showNotice('MCP 服务配置已保存');
+      showNotice('飞书配置已保存');
+    } catch (error) {
+      handleRequestError(error);
+    }
+  }
+
+  async function handleSaveWeeklyNotify(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!user) {
+      return;
+    }
+
+    try {
+      await setWeeklyNotify(notifyHour, notifyMinute);
+      showNotice('周报通知时间已保存');
     } catch (error) {
       handleRequestError(error);
     }
@@ -840,16 +872,10 @@ function App() {
       return;
     }
 
-    if (file.size > 2 * 1024 * 1024) {
-      showNotice('头像文件不能超过 2MB', 'warning');
-      event.target.value = '';
-      return;
-    }
-
     try {
-      const avatar = await fileToDataUrl(file);
+      const avatar = await compressImage(file);
       setChildDraft((current) => ({ ...current, avatar }));
-      showNotice('头像已更新', 'info');
+      showNotice('头像已压缩并更新', 'info');
     } catch (error) {
       handleRequestError(error);
     }
@@ -1193,79 +1219,6 @@ function App() {
             ))}
           </div>
         </section>
-
-        <section className="panel-card">
-          <div className="panel-card__header">
-            <div>
-              <p className="section-eyebrow">MCP 服务通道</p>
-              <h2>飞书与定时能力</h2>
-            </div>
-          </div>
-
-          {user?.role !== 'admin' ? (
-            <div className="empty-card">当前账号没有配置 MCP 服务的权限。</div>
-          ) : (
-            <form className="form-grid" onSubmit={handleSaveMcpServices}>
-              <div className="form-row">
-                <label>
-                  飞书实现方式
-                  <select value={feishuMode} onChange={(event) => setFeishuMode(event.target.value as 'app' | 'webhook')}>
-                    <option value="app">自建应用事件订阅</option>
-                    <option value="webhook">群 webhook</option>
-                  </select>
-                </label>
-                <label>
-                  默认 Chat ID
-                  <input value={feishuDefaultChatId} onChange={(event) => setFeishuDefaultChatId(event.target.value)} placeholder="oc_xxx" />
-                </label>
-              </div>
-
-              <div className="form-row">
-                <label>
-                  飞书 App ID
-                  <input value={feishuAppId} onChange={(event) => setFeishuAppId(event.target.value)} placeholder="cli_xxx" />
-                </label>
-                <label>
-                  飞书 App Secret
-                  <input type="password" value={feishuAppSecret} onChange={(event) => setFeishuAppSecret(event.target.value)} />
-                </label>
-              </div>
-
-              <div className="form-row">
-                <label>
-                  Verification Token
-                  <input value={feishuVerificationToken} onChange={(event) => setFeishuVerificationToken(event.target.value)} />
-                </label>
-                <label>
-                  Signing Secret
-                  <input type="password" value={feishuSigningSecret} onChange={(event) => setFeishuSigningSecret(event.target.value)} />
-                </label>
-              </div>
-
-              <label>
-                兼容 webhook 地址
-                <input value={feishuWebhookUrl} onChange={(event) => setFeishuWebhookUrl(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
-              </label>
-
-              <div className="form-row form-row--tight">
-                <label>
-                  每周通知小时
-                  <input type="number" min={0} max={23} value={notifyHour} onChange={(event) => setNotifyHour(Number(event.target.value))} />
-                </label>
-                <label>
-                  分钟
-                  <input type="number" min={0} max={59} value={notifyMinute} onChange={(event) => setNotifyMinute(Number(event.target.value))} />
-                </label>
-                <label>
-                  最近活跃 Chat ID
-                  <input value={lastActiveChatId} readOnly />
-                </label>
-              </div>
-
-              <button type="submit">保存 MCP 服务配置</button>
-            </form>
-          )}
-        </section>
       </div>
     );
   }
@@ -1310,6 +1263,105 @@ function App() {
             </div>
           )}
         </section>
+
+        {user?.role === 'admin' && (
+          <>
+            <section className="panel-card">
+              <div className="panel-card__header">
+                <div>
+                  <p className="section-eyebrow">飞书机器人设置</p>
+                  <h2>接入凭证与回调配置</h2>
+                </div>
+              </div>
+              <form className="form-grid" onSubmit={handleSaveFeishuConfig}>
+                <label>
+                  飞书接入方式
+                  <select value={feishuMode} onChange={(event) => setFeishuMode(event.target.value as 'app' | 'webhook')}>
+                    <option value="app">自建应用事件订阅（推荐）</option>
+                    <option value="webhook">群 webhook</option>
+                  </select>
+                  <span className="field-hint">推荐「自建应用事件订阅」，可同时接收单聊和群聊消息；「群 webhook」仅支持群消息推送</span>
+                </label>
+
+                <div className="form-row">
+                  <label>
+                    飞书 App ID
+                    <input value={feishuAppId} onChange={(event) => setFeishuAppId(event.target.value)} placeholder="cli_xxxxxxxxxxxxxxxxxx" />
+                    <span className="field-hint">飞书开放平台 → 应用详情 → 凭证与基础信息 → App ID</span>
+                  </label>
+                  <label>
+                    飞书 App Secret
+                    <input type="password" value={feishuAppSecret} onChange={(event) => setFeishuAppSecret(event.target.value)} placeholder="••••••••" />
+                    <span className="field-hint">同页面的 App Secret，切勿泄露</span>
+                  </label>
+                </div>
+
+                <div className="form-row">
+                  <label>
+                    Verification Token
+                    <input value={feishuVerificationToken} onChange={(event) => setFeishuVerificationToken(event.target.value)} placeholder="xxxxxxxxxxxxxxxxxxxxxxxx" />
+                    <span className="field-hint">开放平台 → 事件订阅 → 加密策略 → Verification Token</span>
+                  </label>
+                  <label>
+                    Signing Secret
+                    <input type="password" value={feishuSigningSecret} onChange={(event) => setFeishuSigningSecret(event.target.value)} placeholder="••••••••" />
+                    <span className="field-hint">同页面的 Encrypt Key / Signing Secret</span>
+                  </label>
+                </div>
+
+                <label>
+                  默认通知 Chat ID
+                  <input value={feishuDefaultChatId} onChange={(event) => setFeishuDefaultChatId(event.target.value)} placeholder="oc_xxxxxxxxxxxxxxxxxxxxxxxx" />
+                  <span className="field-hint">机器人主动推送消息的目标群 Chat ID（oc_xxx）。在群内发任意消息后，下方「最近活跃 Chat ID」会自动更新</span>
+                </label>
+
+                {feishuMode === 'webhook' && (
+                  <label>
+                    群 webhook 地址
+                    <input value={feishuWebhookUrl} onChange={(event) => setFeishuWebhookUrl(event.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+                    <span className="field-hint">仅 webhook 模式需要，在飞书群设置 → 机器人 → 添加机器人中获取</span>
+                  </label>
+                )}
+
+                {lastActiveChatId ? (
+                  <label>
+                    最近活跃 Chat ID（只读）
+                    <input value={lastActiveChatId} readOnly />
+                  </label>
+                ) : null}
+
+                <button type="submit">保存飞书配置</button>
+              </form>
+            </section>
+
+            <section className="panel-card">
+              <div className="panel-card__header">
+                <div>
+                  <p className="section-eyebrow">周报通知</p>
+                  <h2>每周统计发送时间</h2>
+                </div>
+              </div>
+              <form className="form-grid" onSubmit={handleSaveWeeklyNotify}>
+                <label>
+                  每周发送时间（每周一自动推送）
+                  <input
+                    type="time"
+                    value={`${String(notifyHour).padStart(2, '0')}:${String(notifyMinute).padStart(2, '0')}`}
+                    onChange={(event) => {
+                      const parts = event.target.value.split(':');
+                      if (parts.length === 2) {
+                        setNotifyHour(Number(parts[0]));
+                        setNotifyMinute(Number(parts[1]));
+                      }
+                    }}
+                  />
+                  <span className="field-hint">每周一该时间点自动向默认 Chat ID 发送上周零花钱统计汇总</span>
+                </label>
+                <button type="submit">保存通知时间</button>
+              </form>
+            </section>
+          </>
+        )}
 
         {user?.role === 'admin' && (
           <button type="button" className="fab-button" onClick={openCreateRobot}>
@@ -1381,10 +1433,12 @@ function App() {
               <label>
                 可控制账号 OpenID
                 <textarea value={robotDraft.controllerOpenIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, controllerOpenIdsText: event.target.value }))} rows={6} required />
+                <span className="field-hint">填写可控制该机器人的飞书用户 OpenID（ou_xxx），每行一个。可在飞书 App「我的」→「关于飞书」→「开发者工具」→「个人 OpenID」中查到</span>
               </label>
               <label>
                 允许触发的 Chat ID
                 <textarea value={robotDraft.allowedChatIdsText} onChange={(event) => setRobotDraft((current) => ({ ...current, allowedChatIdsText: event.target.value }))} rows={6} placeholder="留空表示所有会话都可触发" />
+                <span className="field-hint">填写允许触发该机器人的飞书群/会话 Chat ID（oc_xxx），每行一个，留空则任意会话均可触发</span>
               </label>
             </div>
 
@@ -1436,6 +1490,7 @@ function App() {
                     )}
                   </div>
                   <div className="child-card__balance">零钱余额 {child.balance.toFixed(2)}元</div>
+                  <div className="child-card__daily">每日 {child.dailyAllowance.toFixed(2)}元</div>
                 </div>
               </article>
             );
@@ -1502,6 +1557,7 @@ function App() {
             <label>
               头像上传（可选）
               <input key={childFormKey} type="file" accept="image/*" onChange={handleAvatarUpload} />
+              <span className="field-hint">支持 JPG / PNG / WebP 等常见格式，任意大小均自动缩放至 280×280 并压缩后上传，无需手动处理</span>
             </label>
 
             <div className="action-row">

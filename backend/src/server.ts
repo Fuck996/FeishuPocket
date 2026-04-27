@@ -80,7 +80,7 @@ store.load();
 
 app.use(cors());
 app.use(express.json({
-  limit: '1mb',
+  limit: '5mb',
   verify: (req, _res, buffer) => {
     (req as AuthedRequest).rawBody = buffer.toString('utf8');
   }
@@ -607,7 +607,7 @@ const scheduler = new SchedulerService(
 );
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.4' });
+  res.json({ success: true, version: '0.2.5' });
 });
 
 app.get('/api/setup-status', (_req, res) => {

@@ -56,7 +56,7 @@ const store = new JsonStore(databasePath);
 store.load();
 app.use(cors());
 app.use(express.json({
-    limit: '1mb',
+    limit: '5mb',
     verify: (req, _res, buffer) => {
         req.rawBody = buffer.toString('utf8');
     }
