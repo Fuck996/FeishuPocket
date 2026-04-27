@@ -703,9 +703,13 @@ function buildBalanceSnapshotCardPayload(child: ChildProfile): FeishuCardPayload
 
   const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
   if (templateId) {
+    const avatarUrl = resolveAvatarForFeishu(child);
     basePayload.templateId = templateId;
     basePayload.templateVariable = {
-      child_avatar: resolveAvatarForFeishu(child),
+      child_avatar: avatarUrl,
+      child_avatar_url: avatarUrl,
+      childAvatar: avatarUrl,
+      avatar_url: avatarUrl,
       child_name: child.name,
       balance_after: `${child.balance.toFixed(2)}元`,
       change_amount: `${amountWithSign(latest.amount)}元`,
@@ -918,9 +922,13 @@ async function applyTransaction(input: {
   // 若配置了模板 ID，优先走模板动态渲染
   const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
   if (templateId) {
+    const avatarUrl = resolveAvatarForFeishu(child);
     payload.templateId = templateId;
     payload.templateVariable = {
-      child_avatar: resolveAvatarForFeishu(child),
+      child_avatar: avatarUrl,
+      child_avatar_url: avatarUrl,
+      childAvatar: avatarUrl,
+      avatar_url: avatarUrl,
       child_name: child.name,
       balance_after: `${currentBalance.toFixed(2)}元`,
       change_amount: `${amountWithSign(input.amount)}元`,
@@ -1284,7 +1292,7 @@ async function initFeishuWsClient(): Promise<void> {
           });
         }
         try {
-          await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
+          await processBotMessage('ws', senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
         } catch (error) {
           console.error('[飞书WS] 消息处理失败:', error);
         }
@@ -1357,7 +1365,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.28' });
+  res.json({ success: true, version: '0.3.29' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2138,6 +2146,7 @@ async function handleCardAction(eventData: unknown): Promise<Record<string, unkn
 
 // 处理机器人消息，返回已解析的 action，忽略时返回 null，出错时抛出异常
 async function processBotMessage(
+  channel: 'ws' | 'webhook',
   senderOpenId: string | undefined,
   senderUserId: string | undefined,
   senderUnionId: string | undefined,
@@ -2196,9 +2205,11 @@ async function processBotMessage(
     return null;
   }
 
-  const matchedRobots = resolveMatchedRobots(senderOpenId ?? '');
+  const matchedRobots = resolveMatchedRobots(senderOpenId ?? '').filter((robot) =>
+    channel === 'ws' ? robot.feishuMode !== 'webhook' : robot.feishuMode === 'webhook'
+  );
   if (matchedRobots.length === 0) {
-    logIgnoredInbound('ignored_no_matched_robot_or_controller_openid_not_allowed');
+    logIgnoredInbound(`ignored_no_matched_robot_or_controller_openid_not_allowed:${channel}`);
     return null;
   }
 
@@ -2604,9 +2615,15 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
 
   const { senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId } = extractFeishuEvent(req.body);
 
+  const hasWebhookRobot = store.getSnapshot().robots.some((r) => r.enabled && r.feishuMode === 'webhook');
+  if (!hasWebhookRobot) {
+    res.json({ success: true, ignored: true, reason: 'ignored_webhook_channel_mode_mismatch' });
+    return;
+  }
+
   if (chatId) {
-    // 更新第一个启用的 app 模式机器人（webhook 端点通常对应单一机器人）
-    const matchedRobot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode !== 'webhook');
+    // webhook 回调仅维护 webhook 模式机器人的会话上下文
+    const matchedRobot = store.getSnapshot().robots.find((r) => r.enabled && r.feishuMode === 'webhook');
     if (matchedRobot) {
       store.update((draft) => {
         const r = draft.robots.find((item) => item.id === matchedRobot.id);
@@ -2616,7 +2633,7 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req: AuthedReques
   }
 
   try {
-    const action = await processBotMessage(senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
+    const action = await processBotMessage('webhook', senderOpenId, senderUserId, senderUnionId, senderDisplayNameHint, messageCreateTimeMs, senderType, messageType, contentRaw, chatId, messageId);
     if (!action) {
       res.json({ success: true, ignored: true });
       return;

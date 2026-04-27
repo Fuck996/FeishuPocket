@@ -1,6 +1,6 @@
 {
   "name": "feishu-pocket-backend",
-  "version": "0.3.28",
+  "version": "0.3.29",
   "private": true,
   "type": "module",
   "scripts": {
