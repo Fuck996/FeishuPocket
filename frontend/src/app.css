@@ -147,6 +147,8 @@ p {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 16px;
+  position: relative;
+  z-index: 10;
 }
 
 .topbar-card h1,
@@ -273,6 +275,7 @@ p {
 
 .panel-card__header,
 .list-card,
+.list-card__title-row,
 .child-card__title-row,
 .topbar-card,
 .detail-header,

@@ -768,6 +768,11 @@ function initFeishuWsClient(): void {
 // 服务启动后初始化飞书 WS 连接
 initFeishuWsClient();
 
+// 启动时若有模型余额为空，立即获取一次
+if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.balance === undefined)) {
+  void checkModelBalances();
+}
+
 app.get('/api/version', (_req, res) => {
   res.json({ success: true, version: '0.3.1' });
 });
@@ -1448,6 +1453,8 @@ async function processBotMessage(
 
   const parserModel = resolveParserModelConfig();
   const action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
+  // LLM 调用后异步刷新余额，不阻塞主流程
+  void checkModelBalances();
   if (action.intent === 'unknown') return null;
 
   const robot = pickRobotForAction(matchedRobots, action.childName);
