@@ -59,18 +59,26 @@ async function sendByApp(target, payload) {
         return undefined;
     }
     const tenantAccessToken = await getTenantAccessToken(target.appId, target.appSecret);
-    const card = buildCardSchema(payload);
+    const content = payload.templateId
+        ? {
+            type: 'template',
+            data: {
+                template_id: payload.templateId,
+                template_variable: payload.templateVariable ?? {}
+            }
+        }
+        : buildCardSchema(payload);
     const response = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${tenantAccessToken}`,
             'Content-Type': 'application/json'
         },
-        // app 发送格式：content 直接是 JSON 2.0 schema 字符串
+        // app 发送格式：content 为 JSON 字符串
         body: JSON.stringify({
             receive_id: target.chatId,
             msg_type: 'interactive',
-            content: JSON.stringify(card)
+            content: JSON.stringify(content)
         })
     });
     if (!response.ok) {

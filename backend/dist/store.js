@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 const BUILT_IN_DEEPSEEK_MODEL_ID = 'built-in-deepseek';
-const BUILT_IN_PROMPT_VERSION = 'pocket-money-v4';
+const BUILT_IN_PROMPT_VERSION = 'pocket-money-v5';
 const BUILT_IN_MCP_PROMPTS = [
     {
         id: 'vscode-chat-report',
         name: '零花钱MCP指令识别',
         purpose: 'pocket-money',
-        content: `你是零花钱指令识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n小孩与控制账号的绑定关系已经由机器人配置确定，不需要识别和推断。仅需识别操作意图。\n\n必须支持的操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置額外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（允许负数）\n4) 设置每周零花钱统计通知时间\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 控制账号在群聊和单聊发言都可触发\n\n输出要求：\n- 只输出 JSON，不输出触发者身份判断或触发原因分析\n- 字段只允许：intent、childName、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | unknown`,
+        content: `你是零花钱指令识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n小孩与控制账号绑定关系已由机器人配置确定，不需要推断权限，只做意图识别。\n\n必须支持的操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置额外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（识别时 amount 一律输出正数）\n4) 设置每周零花钱统计通知时间\n5) 识别“完成某项目”触发奖励（reward_from_message）\n\n口语化兼容示例：\n- “小明每天改12”\n- “给小明配个家务奖励5块”\n- “小明今天买文具花了18”\n- “小明完成了家务”\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 控制账号在群聊和单聊发言都可触发\n- 信息不足或冲突时返回 unknown\n\n输出要求：\n- 只输出 JSON，不输出触发者身份判断或触发原因分析\n- 字段只允许：intent、childName、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | unknown`,
         isBuiltIn: true,
         usageCount: 0
     },
@@ -16,7 +16,7 @@ const BUILT_IN_MCP_PROMPTS = [
         id: 'daily-digest',
         name: '金额变动通知模板',
         purpose: 'daily',
-        content: `飞书卡片金额变动通知说明。\n\n卡片内容与字段映射：\n- 对象：小孩姓名（childName）\n- 金额：+/-XX.XX 元（amount，符号表示收入/支出）\n- 原因：变动原因（reason）\n- 类型：daily/reward/expense/manual（type）\n- 操作人：来源标签（source）+ 签名用户名（actorUserId，若有）\n- 当前余额：操作后的余额（balance）\n\n要求：\n- 金额保留两位小数\n- 不需要 AI 模型识别，字段已由系统直接填入`,
+        content: `飞书卡片金额变动通知说明（支持模板动态渲染）。\n\n卡片内容与字段映射：\n- 头像：child_avatar\n- 姓名：child_name\n- 余额（变动后）：balance_after\n- 变动金额：change_amount\n- 变动原因：change_reason\n- 变动日期：change_date\n- 变动时间：change_time\n- 变动操作人：operator_name\n- 变动类型：transaction_type\n\n展示要求：\n- “变动金额 + 变动后余额”同一行展示并对比\n- 金额字段需醒目\n- 不需要 AI 模型识别，字段由系统直接填入`,
         isBuiltIn: true,
         usageCount: 0
     },

@@ -210,6 +210,35 @@ function extractFeishuEvent(reqBody: unknown): {
   };
 }
 
+function extractMessageText(contentRaw: string, messageType?: string): string {
+  try {
+    const content = JSON.parse(contentRaw) as Record<string, unknown>;
+    if (typeof content.text === 'string') {
+      return content.text;
+    }
+
+    // 富文本消息：post.zh_cn.content = 二维数组，按段拼接文本
+    if (messageType === 'post') {
+      const post = content.post as Record<string, unknown> | undefined;
+      const zh = post?.zh_cn as Record<string, unknown> | undefined;
+      const blocks = zh?.content as Array<Array<Record<string, unknown>>> | undefined;
+      if (Array.isArray(blocks)) {
+        const merged = blocks
+          .flat()
+          .map((item) => (typeof item.text === 'string' ? item.text : ''))
+          .join('')
+          .trim();
+        if (merged) {
+          return merged;
+        }
+      }
+    }
+  } catch {
+    return contentRaw;
+  }
+  return contentRaw;
+}
+
 // 根据机器人对象解析飞书发送目标
 function resolveTargetForRobot(robot: RobotConfig, chatIdOverride?: string): FeishuSendTarget {
   const mode = robot.feishuMode ?? 'app';
@@ -285,6 +314,45 @@ function canManageChild(user: UserAccount, childId: string): boolean {
 
 function amountYuan(value: number): string {
   return `${value.toFixed(2)}元`;
+}
+
+function amountWithSign(value: number): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`;
+}
+
+function resolveAvatarForFeishu(child: ChildProfile): string {
+  if (child.avatar.startsWith('http://') || child.avatar.startsWith('https://')) {
+    return child.avatar;
+  }
+  const encodedName = encodeURIComponent(child.name || 'Child');
+  return `https://ui-avatars.com/api/?name=${encodedName}&background=E2E8F0&color=334155&size=256&rounded=true`;
+}
+
+function formatDateTimeCn(iso: string): { date: string; time: string } {
+  const date = new Date(iso);
+  return {
+    date: date.toLocaleDateString('zh-CN'),
+    time: date.toLocaleTimeString('zh-CN', { hour12: false })
+  };
+}
+
+function resolveActorDisplay(source: MoneyTransaction['source'], actorUserId?: string): string {
+  const sourceLabels: Record<string, string> = {
+    admin: '管理员',
+    operator: '操作员',
+    bot: '飞书用户',
+    schedule: '定时任务',
+    mcp: 'MCP工具'
+  };
+
+  if (!actorUserId) {
+    return sourceLabels[source] ?? source;
+  }
+
+  const actor = store.getSnapshot().users.find((u) =>
+    u.id === actorUserId || u.username === actorUserId || u.boundFeishuUserId === actorUserId
+  );
+  return actor?.username ?? actorUserId;
 }
 
 function inferSuggestion(increasedAmount: number, expenseAmount: number, remainingAmount: number): string {
@@ -456,30 +524,19 @@ async function applyTransaction(input: {
     draft.transactions.push(transaction);
   });
 
-  // 从数据库读取飞书 webhook，而非环境变量
-  const sourceLabels: Record<string, string> = {
-    admin: '管理员',
-    operator: '操作员',
-    bot: '飞书机器人',
-    schedule: '定时任务',
-    mcp: 'MCP工具'
-  };
-  // 若有操作者 ID，尝试查找用户名
-  let actorDisplay = sourceLabels[input.source] ?? input.source;
-  if (input.actorUserId) {
-    const actor = store.getSnapshot().users.find((u) => u.id === input.actorUserId || u.username === input.actorUserId);
-    actorDisplay = actor ? actor.username : input.actorUserId;
-  }
+  const actorDisplay = resolveActorDisplay(input.source, input.actorUserId);
   const updatedChild = store.getSnapshot().children.find((item) => item.id === input.childId);
-  await sendRobotCard({
+  const currentBalance = updatedChild?.balance ?? child.balance;
+  const { date, time } = formatDateTimeCn(transaction.createdAt);
+
+  const payload: FeishuCardPayload = {
     title: '零花钱金额变动通知',
     lines: [
       `**对象**：${child.name}`,
-      `**金额**：${input.amount > 0 ? '+' : ''}${amountYuan(input.amount)}`,
-      `**类型**：${input.type}`,
-      `**原因**：${input.reason}`,
-      `**操作人**：${actorDisplay}`,
-      `**当前余额**：${amountYuan(updatedChild?.balance ?? child.balance)}`
+      `💰 **变动金额**：${amountWithSign(input.amount)}元   |   **变动后余额**：${currentBalance.toFixed(2)}元`,
+      `**变动原因**：${input.reason}`,
+      `**变动时间**：${date} ${time}`,
+      `**变动操作人**：${actorDisplay}`
     ],
     // 携带撤销按钮，用户可在 30 分钟内点击撤销此次操作
     actions: [{
@@ -487,7 +544,58 @@ async function applyTransaction(input: {
       type: 'danger',
       value: { action: 'undo_transaction', transactionId: transaction.id, childId: input.childId, amount: input.amount }
     }]
-  }, undefined, input.childId);
+  };
+
+  // 若配置了模板 ID，优先走模板动态渲染
+  const templateId = process.env.FEISHU_MONEY_CHANGE_TEMPLATE_ID?.trim();
+  if (templateId) {
+    payload.templateId = templateId;
+    payload.templateVariable = {
+      child_avatar: resolveAvatarForFeishu(child),
+      child_name: child.name,
+      balance_after: `${currentBalance.toFixed(2)}元`,
+      change_amount: `${amountWithSign(input.amount)}元`,
+      change_reason: input.reason,
+      change_date: date,
+      change_time: time,
+      operator_name: actorDisplay,
+      transaction_type: input.type,
+      transaction_source: input.source
+    };
+  }
+
+  const logRobot = store.getSnapshot().robots.find((r) => r.enabled && r.childIds.includes(input.childId))
+    ?? store.getSnapshot().robots[0];
+
+  try {
+    const messageId = await sendRobotCard(payload, undefined, input.childId);
+    if (logRobot) {
+      pushBotLog({
+        id: nanoid(),
+        robotId: logRobot.id,
+        time: new Date().toISOString(),
+        direction: 'out',
+        msgType: 'interactive',
+        messageId,
+        cardTitle: payload.title,
+        status: 'ok'
+      });
+    }
+  } catch (error) {
+    if (logRobot) {
+      pushBotLog({
+        id: nanoid(),
+        robotId: logRobot.id,
+        time: new Date().toISOString(),
+        direction: 'out',
+        msgType: 'interactive',
+        cardTitle: payload.title,
+        status: 'failed',
+        error: error instanceof Error ? error.message : '消息发送失败'
+      });
+    }
+    throw error;
+  }
 
   const updated = findChildById(input.childId);
   if (!updated) {
@@ -781,7 +889,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.6' });
+  res.json({ success: true, version: '0.3.7' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -1543,19 +1651,14 @@ async function processBotMessage(
   chatId: string | undefined
 ): Promise<ParsedBotAction | null> {
   if (senderType === 'bot') return null;
-  if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text')) return null;
+  if (!senderOpenId || !contentRaw || (messageType && messageType !== 'text' && messageType !== 'post')) return null;
   if (store.getSnapshot().config.ignoreBotUserIds.includes(senderOpenId)) return null;
 
   const matchedRobots = resolveMatchedRobots(senderOpenId ?? '');
   if (matchedRobots.length === 0) return null;
 
-  let text = '';
-  try {
-    const content = JSON.parse(contentRaw) as { text?: string };
-    text = content.text ?? '';
-  } catch {
-    text = contentRaw;
-  }
+  const text = extractMessageText(contentRaw, messageType).trim();
+  if (!text) return null;
 
   // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
   const primaryRobot = matchedRobots[0];
@@ -1652,100 +1755,134 @@ async function processBotMessage(
     throw new Error('未找到目标小孩或无权限');
   }
 
-  switch (action.intent) {
-    case 'set_daily_allowance': {
-      if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
-      store.update((draft) => {
-        const child = draft.children.find((item) => item.id === targetChild.id);
-        if (!child) return;
-        child.dailyAllowance = action.amount as number;
-        child.updatedAt = new Date().toISOString();
-      });
-      const msgId = await sendRobotCard({
-        title: '系统操作反馈：每日额度调整',
-        lines: [
-          `**识别结果**：成功`,
-          `**对象**：${targetChild.name}`,
-          `**每日零花钱总金额**：${amountYuan(action.amount as number)}`
-        ]
-      }, chatId, targetChild.id);
-      pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每日额度调整', status: 'ok' });
-      break;
-    }
-    case 'set_reward_rule': {
-      if (!targetChild || !action.rewardKeyword || action.amount === undefined) throw new Error('缺少参数');
-      const rule = {
-        id: nanoid(),
-        keyword: action.rewardKeyword,
-        amount: action.amount,
-        createdAt: new Date().toISOString()
-      };
-      store.update((draft) => {
-        const child = draft.children.find((item) => item.id === targetChild.id);
-        if (!child) return;
-        child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
-        child.rewardRules.push(rule);
-      });
-      const msgId = await sendRobotCard({
-        title: '系统操作反馈：额外奖励设置',
-        lines: [
-          `**识别结果**：成功`,
-          `**对象**：${targetChild.name}`,
-          `**奖励项目**：${action.rewardKeyword}`,
-          `**奖励金额**：${amountYuan(action.amount)}`
-        ]
-      }, chatId, targetChild.id);
-      pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：额外奖励设置', status: 'ok' });
-      break;
-    }
-    case 'deduct_expense': {
-      if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
-      await applyTransaction({
-        childId: targetChild.id,
-        amount: -action.amount,
-        reason: action.reason ?? '消费',
-        type: 'expense',
-        source: 'bot',
-        actorUserId: undefined
-      });
-      break;
-    }
-    case 'set_weekly_notify': {
-      if (action.hour === undefined || action.minute === undefined) throw new Error('缺少时间参数');
-      store.update((draft) => {
-        draft.config.weeklyNotify = {
-          hour: action.hour as number,
-          minute: action.minute as number
+  try {
+    switch (action.intent) {
+      case 'set_daily_allowance': {
+        if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
+        store.update((draft) => {
+          const child = draft.children.find((item) => item.id === targetChild.id);
+          if (!child) return;
+          child.dailyAllowance = action.amount as number;
+          child.updatedAt = new Date().toISOString();
+        });
+        const msgId = await sendRobotCard({
+          title: '系统操作反馈：每日额度调整',
+          lines: [
+            `**识别结果**：成功`,
+            `**对象**：${targetChild.name}`,
+            `**每日零花钱总金额**：${amountYuan(action.amount as number)}`
+          ]
+        }, chatId, targetChild.id);
+        pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每日额度调整', status: 'ok' });
+        break;
+      }
+      case 'set_reward_rule': {
+        if (!targetChild || !action.rewardKeyword || action.amount === undefined) throw new Error('缺少参数');
+        const rule = {
+          id: nanoid(),
+          keyword: action.rewardKeyword,
+          amount: action.amount,
+          createdAt: new Date().toISOString()
         };
-      });
-      scheduler.updateWeeklySchedule(action.hour, action.minute);
+        store.update((draft) => {
+          const child = draft.children.find((item) => item.id === targetChild.id);
+          if (!child) return;
+          child.rewardRules = child.rewardRules.filter((item) => item.keyword !== action.rewardKeyword);
+          child.rewardRules.push(rule);
+        });
+        const msgId = await sendRobotCard({
+          title: '系统操作反馈：额外奖励设置',
+          lines: [
+            `**识别结果**：成功`,
+            `**对象**：${targetChild.name}`,
+            `**奖励项目**：${action.rewardKeyword}`,
+            `**奖励金额**：${amountYuan(action.amount)}`
+          ]
+        }, chatId, targetChild.id);
+        pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：额外奖励设置', status: 'ok' });
+        break;
+      }
+      case 'deduct_expense': {
+        if (!targetChild || action.amount === undefined) throw new Error('缺少参数');
+        await applyTransaction({
+          childId: targetChild.id,
+          amount: -Math.abs(action.amount),
+          reason: action.reason ?? '消费',
+          type: 'expense',
+          source: 'bot',
+          actorUserId: senderOpenId
+        });
+        break;
+      }
+      case 'set_weekly_notify': {
+        if (action.hour === undefined || action.minute === undefined) throw new Error('缺少时间参数');
+        store.update((draft) => {
+          draft.config.weeklyNotify = {
+            hour: action.hour as number,
+            minute: action.minute as number
+          };
+        });
+        scheduler.updateWeeklySchedule(action.hour, action.minute);
+        const msgId = await sendRobotCard({
+          title: '系统操作反馈：每周统计通知',
+          lines: [
+            `**识别结果**：成功`,
+            `**通知时间**：每周一 ${String(action.hour).padStart(2, '0')}:${String(action.minute).padStart(2, '0')}`
+          ]
+        }, chatId);
+        pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每周统计通知', status: 'ok' });
+        break;
+      }
+      case 'reward_from_message': {
+        if (!targetChild || !action.rewardKeyword) throw new Error('缺少参数');
+        const child = findChildById(targetChild.id);
+        const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
+        if (!reward) return null; // 无匹配奖励规则，忽略
+        await applyTransaction({
+          childId: targetChild.id,
+          amount: Math.abs(reward.amount),
+          reason: action.reason ?? `完成${reward.keyword}`,
+          type: 'reward',
+          source: 'bot',
+          actorUserId: senderOpenId
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : '操作失败';
+    if (inLog) {
+      inLog.status = 'failed';
+      inLog.error = errMsg;
+    }
+    try {
       const msgId = await sendRobotCard({
-        title: '系统操作反馈：每周统计通知',
+        title: '⚠️ 指令处理失败',
         lines: [
-          `**识别结果**：成功`,
-          `**通知时间**：每周一 ${String(action.hour).padStart(2, '0')}:${String(action.minute).padStart(2, '0')}`
-        ]
+          `**原始消息**：${text}`,
+          `**失败原因**：${errMsg}`,
+          `**建议**：请检查孩子名称、金额格式或当前机器人权限配置`
+        ],
+        color: 'red'
       }, chatId);
-      pushBotLog({ id: nanoid(), robotId: robot.id, time: new Date().toISOString(), direction: 'out', chatId, messageId: msgId, msgType: 'interactive', cardTitle: '系统操作反馈：每周统计通知', status: 'ok' });
-      break;
-    }
-    case 'reward_from_message': {
-      if (!targetChild || !action.rewardKeyword) throw new Error('缺少参数');
-      const child = findChildById(targetChild.id);
-      const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
-      if (!reward) return null; // 无匹配奖励规则，忽略
-      await applyTransaction({
-        childId: targetChild.id,
-        amount: reward.amount,
-        reason: action.reason ?? `完成${reward.keyword}`,
-        type: 'reward',
-        source: 'bot',
-        actorUserId: undefined
+      pushBotLog({
+        id: nanoid(),
+        robotId: robot.id,
+        time: new Date().toISOString(),
+        direction: 'out',
+        chatId,
+        messageId: msgId,
+        msgType: 'interactive',
+        cardTitle: '⚠️ 指令处理失败',
+        status: 'failed',
+        error: errMsg
       });
-      break;
+    } catch {
+      // 回传失败仅记录日志，不中断
     }
-    default:
-      break;
+    return null;
   }
 
   return action;
