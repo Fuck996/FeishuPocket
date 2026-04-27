@@ -13,6 +13,8 @@ export interface ChildProfile {
   avatar: string;
   balance: number;
   dailyAllowance: number;
+  dailyGrantHour?: number;   // 每日零花钱发放时刻（0-23），默认 8
+  dailyGrantMinute?: number; // 每日零花钱发放分钟（0-59），默认 0
   rewardRules: RewardRule[];
   createdAt: string;
   updatedAt: string;
@@ -75,6 +77,7 @@ export interface SystemConfig {
   ignoreBotUserIds: string[];
   defaultDailyAllowance: number;
   lastDailyGrantDate?: string;
+  lastDailyGrantTimes?: Record<string, string>; // childId → 最近一次发放日期 "YYYY-MM-DD"
   // 飞书机器人配置（支持自建应用机器人与群 webhook 两种模式）
   feishuMode?: 'app' | 'webhook';
   feishuWebhookUrl?: string;

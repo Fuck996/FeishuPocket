@@ -5,14 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { AppStore, ModelConfig, PromptTemplate } from './types.js';
 
 const BUILT_IN_DEEPSEEK_MODEL_ID = 'built-in-deepseek';
-const BUILT_IN_PROMPT_VERSION = 'pocket-money-v2';
+const BUILT_IN_PROMPT_VERSION = 'pocket-money-v3';
 
 const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'>> = [
   {
     id: 'vscode-chat-report',
     name: '零花钱MCP指令识别',
     purpose: 'pocket-money',
-    content: `你是系统内置 MCP 识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n必须支持以下操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置额外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（允许负数）\n4) 设置每周零花钱统计通知时间\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 必须识别控制账号身份与绑定小孩关系\n- 控制账号在群聊和单聊发言都可触发\n\n输出要求：\n- 只输出 JSON，不输出解释\n- 字段只允许：intent、childName、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | unknown`,
+    content: `你是零花钱指令识别引擎。请根据群聊/单聊文本识别并输出指令。\n\n小孩与控制账号的绑定关系已经由机器人配置确定，不需要识别和推断。仅需识别操作意图。\n\n必须支持的操作：\n1) 调整每日零花钱额度（单位：元）\n2) 设置額外奖励项目与金额（例如：家务 +5 元）\n3) 从零花钱扣除消费金额（允许负数）\n4) 设置每周零花钱统计通知时间\n\n识别约束：\n- 必须屏蔽机器人自身通知消息，避免循环触发\n- 控制账号在群聊和单聊发言都可触发\n\n输出要求：\n- 只输出 JSON，不输出触发者身份判断或触发原因分析\n- 字段只允许：intent、childName、amount、rewardKeyword、reason、hour、minute\n- intent 只允许：set_daily_allowance | set_reward_rule | deduct_expense | set_weekly_notify | reward_from_message | unknown`,
     isBuiltIn: true,
     usageCount: 0
   },
@@ -20,7 +20,7 @@ const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'
     id: 'daily-digest',
     name: '金额变动通知模板',
     purpose: 'daily',
-    content: `你是飞书卡片通知生成器。请用于金额变动场景。\n\n当金额增减时，卡片必须包含：\n- 增减/扣除金额\n- 变动原因（默认：发放零花钱；默认扣除：消费；若识别到更准确原因则使用识别结果）\n- 操作对象（小孩）\n- 操作来源（管理员/操作员/机器人/定时任务）\n\n要求：\n- 文案清晰\n- 金额保留两位小数\n- 结果状态明确（成功/失败）`,
+    content: `飞书卡片金额变动通知说明。\n\n卡片内容与字段映射：\n- 对象：小孩姓名（childName）\n- 金额：+/-XX.XX 元（amount，符号表示收入/支出）\n- 原因：变动原因（reason）\n- 类型：daily/reward/expense/manual（type）\n- 操作人：来源标签（source）+ 签名用户名（actorUserId，若有）\n- 当前余额：操作后的余额（balance）\n\n要求：\n- 金额保留两位小数\n- 不需要 AI 模型识别，字段已由系统直接填入`,
     isBuiltIn: true,
     usageCount: 0
   },
@@ -36,7 +36,7 @@ const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'
     id: 'incident-report',
     name: '系统操作反馈模板',
     purpose: 'incident',
-    content: `你是系统操作反馈通知助手。\n\n以下操作完成后必须回发卡片反馈：\n1) 调整每日额度\n2) 设置额外奖励项目与金额\n3) 设置每周统计通知时间\n\n反馈字段必须包含：\n- 识别结果（成功/失败）\n- 关键参数（对象、金额、时间等）\n- 最终生效值（例如每日零花钱总金额、通知时间）`,
+    content: `系统操作反馈通知字段说明。\n\n以下操作完成后必须回发卡片反馈：\n1) 调整每日额度\n2) 设置額外奖励项目与金额\n3) 设置每周统计通知时间\n\n卡片必须包含字段（直接填入对应字段，不要口头降述）：\n- intent：操作类型（set_daily_allowance/set_reward_rule/set_weekly_notify）\n- childName：操作对象小孩姓名（若适用）\n- amount：生效金额（小数展开）\n- hour/minute：生效时间（若为时间类操作）\n- actorUserId：操作者用户名（若消息包含）\n- status：成功/失败`,
     isBuiltIn: true,
     usageCount: 0
   },
@@ -44,7 +44,7 @@ const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'
     id: 'optimization-suggestion',
     name: '控制账号触发规则模板',
     purpose: 'optimization',
-    content: `你是控制账号与权限规则检查器。\n\n规则要求：\n- 小孩由控制账号绑定管理范围\n- 控制账号在单聊和群聊发言都可触发机器人\n- 未绑定控制账号的消息必须忽略\n- 机器人消息必须忽略，防止循环\n\n请输出执行判断结果与原因。`,
+    content: `控制账号权限与触发规则说明（平台内置文档）。\n\n权限设计：\n- 小孩由机器人配置绑定，每个机器人的 childIds 字段定义它可管理的小孩；\n- 每个机器人的 controllerOpenIds 字段定义哪些飞书用户有权限触发该机器人；\n- controllerOpenIds 中的用户在单聊和群聊中发言均可触发；\n- 未在 controllerOpenIds 中的用户发言必须忽略；\n- 机器人自身的消息必须忽略，防止循环。\n\n注：小孩与控制账号的绑定关系已经由机器人配置确定，不需要每次识别或推断。`,
     isBuiltIn: true,
     usageCount: 0
   }
@@ -103,6 +103,7 @@ export class JsonStore {
         ignoreBotUserIds: parsed.config?.ignoreBotUserIds ?? [],
         defaultDailyAllowance: parsed.config?.defaultDailyAllowance ?? 10,
         lastDailyGrantDate: parsed.config?.lastDailyGrantDate,
+        lastDailyGrantTimes: parsed.config?.lastDailyGrantTimes ?? {},
         feishuMode: parsed.config?.feishuMode ?? 'app',
         feishuWebhookUrl: parsed.config?.feishuWebhookUrl,
         feishuAppId: parsed.config?.feishuAppId,

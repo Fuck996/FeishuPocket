@@ -84,14 +84,14 @@ export async function getChildren(): Promise<ChildProfile[]> {
   return result.data;
 }
 
-export async function createChild(payload: { name: string; avatar?: string; dailyAllowance: number }): Promise<void> {
+export async function createChild(payload: { name: string; avatar?: string; dailyAllowance: number; dailyGrantHour?: number; dailyGrantMinute?: number }): Promise<void> {
   await request('/api/children', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
 }
 
-export async function updateChild(childId: string, payload: { name?: string; avatar?: string }): Promise<void> {
+export async function updateChild(childId: string, payload: { name?: string; avatar?: string; dailyGrantHour?: number; dailyGrantMinute?: number }): Promise<void> {
   await request(`/api/children/${childId}`, {
     method: 'PUT',
     body: JSON.stringify(payload)

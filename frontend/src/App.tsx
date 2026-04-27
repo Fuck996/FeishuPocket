@@ -63,6 +63,8 @@ interface ChildDraft {
   name: string;
   avatar: string;
   dailyAllowance: number;
+  dailyGrantHour: number;
+  dailyGrantMinute: number;
 }
 
 interface ModelDraft {
@@ -195,7 +197,9 @@ function createEmptyChildDraft(defaultDailyAllowance: number): ChildDraft {
   return {
     name: '',
     avatar: '',
-    dailyAllowance: defaultDailyAllowance
+    dailyAllowance: defaultDailyAllowance,
+    dailyGrantHour: 8,
+    dailyGrantMinute: 0
   };
 }
 
@@ -590,7 +594,9 @@ function App() {
     setChildDraft({
       name: child.name,
       avatar: child.avatar,
-      dailyAllowance: child.dailyAllowance
+      dailyAllowance: child.dailyAllowance,
+      dailyGrantHour: child.dailyGrantHour ?? 8,
+      dailyGrantMinute: child.dailyGrantMinute ?? 0
     });
     setChildAdjustAmount(0);
     setChildAdjustReason('发放零花钱');
@@ -703,7 +709,9 @@ function App() {
       if (childView.mode === 'edit') {
         await updateChild(childView.childId, {
           name: childDraft.name.trim(),
-          avatar: childDraft.avatar
+          avatar: childDraft.avatar,
+          dailyGrantHour: childDraft.dailyGrantHour,
+          dailyGrantMinute: childDraft.dailyGrantMinute
         });
         await setDailyAllowance(childView.childId, childDraft.dailyAllowance);
         showNotice('孩子信息已更新');
@@ -711,7 +719,9 @@ function App() {
         await createChild({
           name: childDraft.name.trim(),
           avatar: childDraft.avatar,
-          dailyAllowance: childDraft.dailyAllowance
+          dailyAllowance: childDraft.dailyAllowance,
+          dailyGrantHour: childDraft.dailyGrantHour,
+          dailyGrantMinute: childDraft.dailyGrantMinute
         });
         showNotice('孩子已创建');
       }
@@ -1648,6 +1658,18 @@ function App() {
               <label>
                 每日额度
                 <input type="number" min={0} step="0.1" value={childDraft.dailyAllowance} onChange={(event) => setChildDraft((current) => ({ ...current, dailyAllowance: Number(event.target.value) }))} />
+              </label>
+            </div>
+
+            <div className="form-row">
+              <label>
+                每日发放时 (0-23)
+                <input type="number" min={0} max={23} step={1} value={childDraft.dailyGrantHour} onChange={(event) => setChildDraft((current) => ({ ...current, dailyGrantHour: Number(event.target.value) }))} />
+              </label>
+              <label>
+                每日发放分 (0-59)
+                <input type="number" min={0} max={59} step={1} value={childDraft.dailyGrantMinute} onChange={(event) => setChildDraft((current) => ({ ...current, dailyGrantMinute: Number(event.target.value) }))} />
+                <span className="field-hint">零花钱每天在此时刻自动发放，精确到分钟</span>
               </label>
             </div>
 

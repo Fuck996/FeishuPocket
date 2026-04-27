@@ -15,7 +15,8 @@ export class SchedulerService {
   constructor(handlers: SchedulerHandlers, weeklyHour: number, weeklyMinute: number) {
     this.handlers = handlers;
 
-    this.dailyTask = cron.schedule('0 8 * * *', async () => {
+    // 每分钟检查一次，按每个孩子各自配置的发放时间发放零花钱
+    this.dailyTask = cron.schedule('* * * * *', async () => {
       await this.handlers.runDailyGrant();
     });
 

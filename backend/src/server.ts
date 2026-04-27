@@ -405,13 +405,29 @@ async function applyTransaction(input: {
   });
 
   // 从数据库读取飞书 webhook，而非环境变量
+  const sourceLabels: Record<string, string> = {
+    admin: '管理员',
+    operator: '操作员',
+    bot: '飞书机器人',
+    schedule: '定时任务',
+    mcp: 'MCP工具'
+  };
+  // 若有操作者 ID，尝试查找用户名
+  let actorDisplay = sourceLabels[input.source] ?? input.source;
+  if (input.actorUserId) {
+    const actor = store.getSnapshot().users.find((u) => u.id === input.actorUserId || u.username === input.actorUserId);
+    actorDisplay = actor ? actor.username : input.actorUserId;
+  }
+  const updatedChild = store.getSnapshot().children.find((item) => item.id === input.childId);
   await sendRobotCard({
     title: '零花钱金额变动通知',
     lines: [
       `**对象**：${child.name}`,
       `**金额**：${input.amount > 0 ? '+' : ''}${amountYuan(input.amount)}`,
+      `**类型**：${input.type}`,
       `**原因**：${input.reason}`,
-      `**来源**：${input.source}`
+      `**操作人**：${actorDisplay}`,
+      `**当前余额**：${amountYuan(updatedChild?.balance ?? child.balance)}`
     ],
     // 携带撤销按钮，用户可在 30 分钟内点击撤销此次操作
     actions: [{
@@ -501,12 +517,25 @@ function pickRobotForAction(robots: RobotConfig[], childName?: string): RobotCon
 
 async function runDailyGrant(): Promise<void> {
   const snapshot = store.getSnapshot();
-  const today = new Date().toISOString().slice(0, 10);
-  if (snapshot.config.lastDailyGrantDate === today) {
-    return;
-  }
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const grantTimes = snapshot.config.lastDailyGrantTimes ?? {};
 
+  let anyGranted = false;
   for (const child of snapshot.children) {
+    // 若已在今日发放过，跳过
+    if (grantTimes[child.id] === today) {
+      continue;
+    }
+    // 读取该孩子配置的发放时刻，默认 08:00
+    const grantHour = child.dailyGrantHour ?? 8;
+    const grantMinute = child.dailyGrantMinute ?? 0;
+    // 当前时刻 >= 配置时刻才发放
+    if (currentHour < grantHour || (currentHour === grantHour && currentMinute < grantMinute)) {
+      continue;
+    }
     await applyTransaction({
       childId: child.id,
       amount: child.dailyAllowance,
@@ -514,11 +543,17 @@ async function runDailyGrant(): Promise<void> {
       type: 'daily',
       source: 'schedule'
     });
+    store.update((draft) => {
+      if (!draft.config.lastDailyGrantTimes) {
+        draft.config.lastDailyGrantTimes = {};
+      }
+      draft.config.lastDailyGrantTimes[child.id] = today;
+    });
+    anyGranted = true;
   }
-
-  store.update((draft) => {
-    draft.config.lastDailyGrantDate = today;
-  });
+  if (anyGranted) {
+    console.log(`[每日发放] ${today} 完成部分孩子零花钱发放`);
+  }
 }
 
 function getLastWeekRange(): { start: Date; end: Date; startText: string; endText: string } {
@@ -672,7 +707,7 @@ function initFeishuWsClient(): void {
 initFeishuWsClient();
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.2.8' });
+  res.json({ success: true, version: '0.2.9' });
 });
 
 app.get('/api/setup-status', (_req, res) => {
@@ -771,7 +806,7 @@ app.get('/api/children', requireAuth, (req: AuthedRequest, res) => {
 });
 
 app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
-  const { name, avatar, dailyAllowance } = req.body as { name?: string; avatar?: string; dailyAllowance?: number };
+  const { name, avatar, dailyAllowance, dailyGrantHour, dailyGrantMinute } = req.body as { name?: string; avatar?: string; dailyAllowance?: number; dailyGrantHour?: number; dailyGrantMinute?: number };
   if (!name) {
     res.status(400).json({ success: false, error: '姓名必填' });
     return;
@@ -784,6 +819,8 @@ app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
     avatar: avatar ?? '',
     balance: 0,
     dailyAllowance: dailyAllowance ?? store.getSnapshot().config.defaultDailyAllowance,
+    dailyGrantHour: dailyGrantHour !== undefined ? Number(dailyGrantHour) : undefined,
+    dailyGrantMinute: dailyGrantMinute !== undefined ? Number(dailyGrantMinute) : undefined,
     rewardRules: [],
     createdAt: now,
     updatedAt: now
@@ -798,7 +835,7 @@ app.post('/api/children', requireAuth, requireRole('admin'), (req, res) => {
 
 app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) => {
   const { childId } = req.params;
-  const { name, avatar } = req.body as { name?: string; avatar?: string };
+  const { name, avatar, dailyGrantHour, dailyGrantMinute } = req.body as { name?: string; avatar?: string; dailyGrantHour?: number; dailyGrantMinute?: number };
 
   store.update((draft) => {
     const child = draft.children.find((item) => item.id === childId);
@@ -810,6 +847,12 @@ app.put('/api/children/:childId', requireAuth, requireRole('admin'), (req, res) 
     }
     if (avatar !== undefined) {
       child.avatar = avatar;
+    }
+    if (dailyGrantHour !== undefined) {
+      child.dailyGrantHour = Number(dailyGrantHour);
+    }
+    if (dailyGrantMinute !== undefined) {
+      child.dailyGrantMinute = Number(dailyGrantMinute);
     }
     child.updatedAt = new Date().toISOString();
   });

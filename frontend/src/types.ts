@@ -12,6 +12,8 @@ export interface ChildProfile {
   avatar: string;
   balance: number;
   dailyAllowance: number;
+  dailyGrantHour?: number;
+  dailyGrantMinute?: number;
   rewardRules: Array<{ id: string; keyword: string; amount: number }>;
 }
 
