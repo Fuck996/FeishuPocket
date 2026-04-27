@@ -61,6 +61,7 @@ const DEFAULT_STORE: AppStore = {
   config: {
     weeklyNotify: { hour: 20, minute: 0 },
     ignoreBotUserIds: [],
+    processedMessageIds: [],
     defaultDailyAllowance: 10,
     builtInPromptVersion: BUILT_IN_PROMPT_VERSION
   }
@@ -116,6 +117,7 @@ export class JsonStore {
       config: {
         weeklyNotify: parsed.config?.weeklyNotify ?? { hour: 20, minute: 0 },
         ignoreBotUserIds: parsed.config?.ignoreBotUserIds ?? [],
+        processedMessageIds: parsed.config?.processedMessageIds ?? [],
         defaultDailyAllowance: parsed.config?.defaultDailyAllowance ?? 10,
         lastDailyGrantDate: parsed.config?.lastDailyGrantDate,
         lastDailyGrantTimes: parsed.config?.lastDailyGrantTimes ?? {},

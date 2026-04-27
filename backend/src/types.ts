@@ -84,6 +84,7 @@ export interface WeeklyNotifyConfig {
 export interface SystemConfig {
   weeklyNotify: WeeklyNotifyConfig;
   ignoreBotUserIds: string[];
+  processedMessageIds?: string[];
   defaultDailyAllowance: number;
   lastDailyGrantDate?: string;
   lastDailyGrantTimes?: Record<string, string>; // childId → 最近一次发放日期 "YYYY-MM-DD"

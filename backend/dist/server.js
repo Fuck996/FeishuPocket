@@ -16,8 +16,7 @@ import { checkAllModelBalances } from './modelBalance.js';
 // 内存日志，按机器人 ID 存储，最多保留每机器人 200 条
 const botLogs = new Map();
 const BOT_LOG_MAX = 200;
-const inboundMessageDedup = new Map();
-const INBOUND_MESSAGE_DEDUP_TTL_MS = 10 * 60 * 1000;
+const inboundProcessedMessageIds = new Set();
 const FEISHU_MESSAGE_MAX_AGE_MS = Number(process.env.FEISHU_MESSAGE_MAX_AGE_MS ?? 30 * 60 * 1000);
 const feishuUserNameCache = new Map();
 const FEISHU_USER_NAME_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -52,27 +51,28 @@ function pushBotLog(entry) {
         list.splice(0, list.length - BOT_LOG_MAX);
     botLogs.set(entry.robotId, list);
 }
-function cleanupInboundMessageDedup(now) {
-    for (const [messageId, expireAt] of inboundMessageDedup.entries()) {
-        if (expireAt <= now) {
-            inboundMessageDedup.delete(messageId);
-        }
-    }
-}
 function isInboundMessageDuplicate(messageId) {
     if (!messageId) {
         return false;
     }
-    const now = Date.now();
-    cleanupInboundMessageDedup(now);
-    const expireAt = inboundMessageDedup.get(messageId);
-    return Boolean(expireAt && expireAt > now);
+    return inboundProcessedMessageIds.has(messageId);
 }
 function markInboundMessageProcessed(messageId) {
     if (!messageId) {
         return;
     }
-    inboundMessageDedup.set(messageId, Date.now() + INBOUND_MESSAGE_DEDUP_TTL_MS);
+    if (inboundProcessedMessageIds.has(messageId)) {
+        return;
+    }
+    inboundProcessedMessageIds.add(messageId);
+    store.update((draft) => {
+        if (!draft.config.processedMessageIds) {
+            draft.config.processedMessageIds = [];
+        }
+        if (!draft.config.processedMessageIds.includes(messageId)) {
+            draft.config.processedMessageIds.push(messageId);
+        }
+    });
 }
 function buildFeishuUserCacheKey(idType, id) {
     return `${idType}:${id}`;
@@ -238,7 +238,12 @@ const jwtSecret = initializeJwtSecret();
 const databasePath = process.env.DATABASE_PATH ?? path.resolve(__dirname, '../data/store.json');
 const frontendDistPath = path.resolve(__dirname, '../public');
 const store = new JsonStore(databasePath);
-store.load();
+const initialSnapshot = store.load();
+for (const processedMessageId of initialSnapshot.config.processedMessageIds ?? []) {
+    if (processedMessageId) {
+        inboundProcessedMessageIds.add(processedMessageId);
+    }
+}
 app.use(cors());
 app.use(express.json({
     limit: '5mb',
@@ -1151,7 +1156,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.27' });
+    res.json({ success: true, version: '0.3.28' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1850,6 +1855,12 @@ async function processBotMessage(senderOpenId, senderUserId, senderUnionId, send
         logIgnoredInbound('ignored_empty_text_after_extract');
         return null;
     }
+    if (isInboundMessageDuplicate(messageId)) {
+        logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
+        return null;
+    }
+    // message_id 一旦处理过即永久去重，防止重复回调或重连重投递再次触发。
+    markInboundMessageProcessed(messageId);
     // 选一个代表机器人用于日志归属（首选绑定了当前 chatId 对应小孩的机器人）
     const primaryRobot = pickRobotForAction(matchedRobots, chatId) ?? matchedRobots[0];
     // 写入"收到消息"日志
@@ -1919,11 +1930,6 @@ async function processBotMessage(senderOpenId, senderUserId, senderUnionId, send
     if (inLog)
         inLog.intent = action.intent;
     if (action.intent === 'unknown') {
-        if (isInboundMessageDuplicate(messageId)) {
-            logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
-            return null;
-        }
-        markInboundMessageProcessed(messageId);
         if (inLog)
             inLog.status = 'unrecognized';
         // 发送识别失败反馈卡片
@@ -1951,11 +1957,6 @@ async function processBotMessage(senderOpenId, senderUserId, senderUnionId, send
         catch { /* 通知失败不阻断 */ }
         return null;
     }
-    if (isInboundMessageDuplicate(messageId)) {
-        logIgnoredInbound(`ignored_duplicate_message_id:${messageId}`);
-        return null;
-    }
-    markInboundMessageProcessed(messageId);
     const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
