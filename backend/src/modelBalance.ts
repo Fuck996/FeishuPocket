@@ -14,15 +14,15 @@ interface DeepSeekBalanceResponse {
  * 从DeepSeek API响应中提取余额
  */
 export function extractDeepSeekBalance(data: DeepSeekBalanceResponse): number | null {
+  let raw: unknown = null;
   if (data.balance_log_list && data.balance_log_list.length > 0) {
-    return data.balance_log_list[0].total_balance ?? null;
+    raw = data.balance_log_list[0].total_balance ?? null;
+  } else if (data.balance_infos && data.balance_infos.length > 0) {
+    raw = data.balance_infos[0].total_balance ?? null;
   }
-
-  if (data.balance_infos && data.balance_infos.length > 0) {
-    return data.balance_infos[0].total_balance ?? null;
-  }
-
-  return null;
+  if (raw === null || raw === undefined) return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
 }
 
 /**

@@ -1046,7 +1046,7 @@ function App() {
                     <div className="list-card__title">
                       {model.name}
                       {model.balance !== undefined && (
-                        <span className="model-balance">¥{model.balance.toFixed(2)}</span>
+                        <span className="model-balance">¥{Number(model.balance).toFixed(2)}</span>
                       )}
                     </div>
                     <div className="list-card__meta">{model.provider} · {model.modelId || '未设置模型 ID'} · {getModelStatusLabel(model.status)}</div>
