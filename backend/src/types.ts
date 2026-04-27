@@ -66,12 +66,42 @@ export interface SystemConfig {
   lastDailyGrantDate?: string;
 }
 
+export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';
+
+export interface ModelConfig {
+  id: string;
+  name: string; // 配置名称
+  provider: ModelProvider; // 模型服务商
+  apiUrl: string; // API 基础地址
+  apiKey?: string; // API Key (不存储)
+  hasApiKey?: boolean; // 返回前端时的脱敏标记
+  modelId?: string; // 已选择的模型 ID
+  isBuiltIn: boolean; // 是否推荐模型
+  status: 'connected' | 'testing' | 'disconnected' | 'unconfigured'; // 连接状态
+  lastTestedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string; // 模板名称
+  purpose: 'pocket-money' | 'custom'; // 用途
+  content: string; // 模板内容
+  isBuiltIn: boolean; // 是否内置模板
+  usageCount: number; // 使用次数
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppStore {
   users: UserAccount[];
   children: ChildProfile[];
   transactions: MoneyTransaction[];
   weeklySummaries: WeeklySummary[];
   config: SystemConfig;
+  models: ModelConfig[];
+  prompts: PromptTemplate[];
 }
 
 export interface ParsedBotAction {

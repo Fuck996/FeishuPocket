@@ -1,4 +1,4 @@
-import { ChildProfile, OperatorUser, UserInfo, WeeklySummary } from './types';
+import { ChildProfile, OperatorUser, UserInfo, WeeklySummary, ModelConfig, PromptTemplate } from './types';
 
 const TOKEN_KEY = 'fp_token';
 
@@ -133,4 +133,60 @@ export async function getTransactions(): Promise<Array<{ id: string; childId: st
 export async function getWeeklySummaries(): Promise<WeeklySummary[]> {
   const result = await request<{ success: true; data: WeeklySummary[] }>('/api/weekly-summaries');
   return result.data;
+}
+
+// ===== Model Config APIs =====
+export async function getModels(): Promise<ModelConfig[]> {
+  const result = await request<{ success: true; data: ModelConfig[] }>('/api/models');
+  return result.data;
+}
+
+export async function createModel(payload: Omit<ModelConfig, 'id' | 'createdAt' | 'updatedAt'>): Promise<ModelConfig> {
+  const result = await request<{ success: true; data: ModelConfig }>('/api/models', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return result.data;
+}
+
+export async function updateModel(id: string, payload: Partial<ModelConfig>): Promise<ModelConfig> {
+  const result = await request<{ success: true; data: ModelConfig }>(`/api/models/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+  return result.data;
+}
+
+export async function deleteModel(id: string): Promise<void> {
+  await request(`/api/models/${id}`, {
+    method: 'DELETE'
+  });
+}
+
+// ===== Prompt Template APIs =====
+export async function getPrompts(): Promise<PromptTemplate[]> {
+  const result = await request<{ success: true; data: PromptTemplate[] }>('/api/prompts');
+  return result.data;
+}
+
+export async function createPrompt(payload: Omit<PromptTemplate, 'id' | 'createdAt' | 'updatedAt'>): Promise<PromptTemplate> {
+  const result = await request<{ success: true; data: PromptTemplate }>('/api/prompts', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+  return result.data;
+}
+
+export async function updatePrompt(id: string, payload: Partial<PromptTemplate>): Promise<PromptTemplate> {
+  const result = await request<{ success: true; data: PromptTemplate }>(`/api/prompts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+  return result.data;
+}
+
+export async function deletePrompt(id: string): Promise<void> {
+  await request(`/api/prompts/${id}`, {
+    method: 'DELETE'
+  });
 }

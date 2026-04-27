@@ -10,6 +10,7 @@ import { parseBotAction } from './aiParser.js';
 import { sendFeishuCard } from './feishu.js';
 import { SchedulerService } from './scheduler.js';
 import { JsonStore } from './store.js';
+import { checkAllModelBalances } from './modelBalance.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -311,13 +312,22 @@ async function runWeeklySummary() {
         });
     }
 }
+async function checkModelBalances() {
+    try {
+        await checkAllModelBalances();
+    }
+    catch (error) {
+        console.error('[Scheduler] Error checking model balances:', error);
+    }
+}
 const snapshot = store.getSnapshot();
 const scheduler = new SchedulerService({
     runDailyGrant,
-    runWeeklySummary
+    runWeeklySummary,
+    checkModelBalances
 }, snapshot.config.weeklyNotify.hour, snapshot.config.weeklyNotify.minute);
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.1.0' });
+    res.json({ success: true, version: '0.1.2' });
 });
 app.post('/api/init-admin', async (req, res) => {
     const { username, password } = req.body;
@@ -831,6 +841,123 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
         }
     });
 });
+// ===== Model Config APIs =====
+app.get('/api/models', requireAuth, (req, res) => {
+    const models = store.getAllModels();
+    // 脱敏 API Key
+    const sanitized = models.map(m => ({
+        ...m,
+        apiKey: undefined,
+        hasApiKey: !!m.apiKey
+    }));
+    res.json({ success: true, data: sanitized });
+});
+app.post('/api/models', requireAuth, requireRole('admin'), async (req, res) => {
+    const { name, provider, apiUrl, apiKey, modelId, isBuiltIn } = req.body;
+    if (!name || !provider || !apiUrl) {
+        res.status(400).json({ success: false, error: '名称、服务商和API地址必填' });
+        return;
+    }
+    try {
+        const model = store.addModel({
+            name,
+            provider: provider,
+            apiUrl,
+            apiKey,
+            modelId,
+            isBuiltIn: isBuiltIn ?? false,
+            status: 'unconfigured'
+        });
+        res.json({ success: true, data: { ...model, apiKey: undefined, hasApiKey: !!model.apiKey } });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: '添加模型配置失败' });
+    }
+});
+app.put('/api/models/:id', requireAuth, requireRole('admin'), async (req, res) => {
+    const { id } = req.params;
+    const updates = req.body;
+    const model = store.getModel(id);
+    if (!model) {
+        res.status(404).json({ success: false, error: '模型不存在' });
+        return;
+    }
+    try {
+        const updated = store.updateModel(id, updates);
+        if (!updated) {
+            res.status(500).json({ success: false, error: '更新模型失败' });
+            return;
+        }
+        res.json({ success: true, data: { ...updated, apiKey: undefined, hasApiKey: !!updated.apiKey } });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: '更新模型失败' });
+    }
+});
+app.delete('/api/models/:id', requireAuth, requireRole('admin'), (req, res) => {
+    const { id } = req.params;
+    if (store.deleteModel(id)) {
+        res.json({ success: true, message: '模型删除成功' });
+    }
+    else {
+        res.status(404).json({ success: false, error: '模型不存在' });
+    }
+});
+// ===== Prompt Template APIs =====
+app.get('/api/prompts', requireAuth, (req, res) => {
+    const prompts = store.getAllPrompts();
+    res.json({ success: true, data: prompts });
+});
+app.post('/api/prompts', requireAuth, requireRole('admin'), (req, res) => {
+    const { name, purpose, content, isBuiltIn } = req.body;
+    if (!name || !purpose || !content) {
+        res.status(400).json({ success: false, error: '名称、用途和内容必填' });
+        return;
+    }
+    try {
+        const prompt = store.addPrompt({
+            name,
+            purpose: purpose,
+            content,
+            isBuiltIn: isBuiltIn ?? false,
+            usageCount: 0
+        });
+        res.json({ success: true, data: prompt });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: '添加提示词模板失败' });
+    }
+});
+app.put('/api/prompts/:id', requireAuth, requireRole('admin'), (req, res) => {
+    const { id } = req.params;
+    const updates = req.body;
+    const prompt = store.getPrompt(id);
+    if (!prompt) {
+        res.status(404).json({ success: false, error: '提示词模板不存在' });
+        return;
+    }
+    try {
+        const updated = store.updatePrompt(id, updates);
+        if (!updated) {
+            res.status(500).json({ success: false, error: '更新提示词模板失败' });
+            return;
+        }
+        res.json({ success: true, data: updated });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: '更新提示词模板失败' });
+    }
+});
+app.delete('/api/prompts/:id', requireAuth, requireRole('admin'), (req, res) => {
+    const { id } = req.params;
+    if (store.deletePrompt(id)) {
+        res.json({ success: true, message: '提示词模板删除成功' });
+    }
+    else {
+        res.status(404).json({ success: false, error: '提示词模板不存在' });
+    }
+});
 app.listen(port, host, () => {
     console.log(`Feishu Pocket backend running at http://${host}:${port}`);
 });
+export { store };

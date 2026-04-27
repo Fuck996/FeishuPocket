@@ -35,3 +35,31 @@ export interface OperatorUser {
   childIds: string[];
   boundFeishuUserId?: string;
 }
+
+export type ModelProvider = 'openai' | 'deepseek' | 'google' | 'custom';
+
+export interface ModelConfig {
+  id: string;
+  name: string;
+  provider: ModelProvider;
+  apiUrl: string;
+  apiKey?: string;
+  hasApiKey?: boolean;
+  modelId?: string;
+  isBuiltIn: boolean;
+  status: 'connected' | 'testing' | 'disconnected' | 'unconfigured';
+  lastTestedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  purpose: 'pocket-money' | 'custom';
+  content: string;
+  isBuiltIn: boolean;
+  usageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}

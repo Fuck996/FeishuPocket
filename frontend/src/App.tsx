@@ -5,8 +5,14 @@ import {
   bindFeishu,
   createChild,
   createOperator,
+  createModel,
+  createPrompt,
+  deleteModel,
+  deletePrompt,
   getChildren,
+  getModels,
   getOperators,
+  getPrompts,
   getTransactions,
   getWeeklySummaries,
   initAdmin,
@@ -16,9 +22,11 @@ import {
   setDailyAllowance,
   setRewardRule,
   setWeeklyNotify,
-  updateOperator
+  updateOperator,
+  updateModel,
+  updatePrompt
 } from './api';
-import { ChildProfile, OperatorUser, UserInfo, WeeklySummary } from './types';
+import { ChildProfile, ModelConfig, OperatorUser, PromptTemplate, UserInfo, WeeklySummary } from './types';
 
 function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
@@ -46,15 +54,34 @@ function App() {
   const [notifyHour, setNotifyHour] = useState(20);
   const [notifyMinute, setNotifyMinute] = useState(0);
 
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
+  const [newModelName, setNewModelName] = useState('');
+  const [newModelProvider, setNewModelProvider] = useState<'openai' | 'deepseek' | 'google' | 'custom'>('openai');
+  const [newModelUrl, setNewModelUrl] = useState('https://api.openai.com');
+  const [newModelKey, setNewModelKey] = useState('');
+  const [newModelId, setNewModelId] = useState('gpt-4');
+  const [newPromptName, setNewPromptName] = useState('');
+  const [newPromptPurpose, setNewPromptPurpose] = useState<'pocket-money' | 'custom'>('pocket-money');
+  const [newPromptContent, setNewPromptContent] = useState('');
+
   const childMap = useMemo(() => {
     return new Map(children.map((item) => [item.id, item]));
   }, [children]);
 
   async function reloadData(currentUser: UserInfo): Promise<void> {
-    const [childList, txList, weeklyList] = await Promise.all([getChildren(), getTransactions(), getWeeklySummaries()]);
+    const [childList, txList, weeklyList, modelList, promptList] = await Promise.all([
+      getChildren(),
+      getTransactions(),
+      getWeeklySummaries(),
+      getModels(),
+      getPrompts()
+    ]);
     setChildren(childList);
     setTransactions(txList);
     setSummaries(weeklyList);
+    setModels(modelList);
+    setPrompts(promptList);
     if (currentUser.role === 'admin') {
       const operatorList = await getOperators();
       setOperators(operatorList);
@@ -364,6 +391,135 @@ function App() {
               </p>
               <p>{tx.reason}</p>
               <p>{new Date(tx.createdAt).toLocaleString('zh-CN')}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>模型配置</h2>
+        {user.role === 'admin' && (
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await createModel({
+                name: newModelName,
+                provider: newModelProvider,
+                apiUrl: newModelUrl,
+                apiKey: newModelKey,
+                modelId: newModelId,
+                isBuiltIn: false,
+                status: 'unconfigured'
+              });
+              setNewModelName('');
+              setNewModelKey('');
+              await reloadData(user);
+              resetNotice('模型配置已添加');
+            } catch (err) {
+              setError((err as Error).message);
+            }
+          }} className="form-grid">
+            <label>
+              配置名称
+              <input value={newModelName} onChange={(e) => setNewModelName(e.target.value)} required />
+            </label>
+            <label>
+              服务商
+              <select value={newModelProvider} onChange={(e) => setNewModelProvider(e.target.value as any)}>
+                <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="google">Google</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label>
+              API地址
+              <input value={newModelUrl} onChange={(e) => setNewModelUrl(e.target.value)} required />
+            </label>
+            <label>
+              API Key
+              <input type="password" value={newModelKey} onChange={(e) => setNewModelKey(e.target.value)} required />
+            </label>
+            <label>
+              模型ID
+              <input value={newModelId} onChange={(e) => setNewModelId(e.target.value)} />
+            </label>
+            <button type="submit">添加模型</button>
+          </form>
+        )}
+        <div className="list">
+          {models.map((model) => (
+            <div className="sub-card" key={model.id}>
+              <p><strong>{model.name}</strong> ({model.provider})</p>
+              <p>状态: {model.status}</p>
+              <p>模型ID: {model.modelId || '未设置'}</p>
+              {user.role === 'admin' && (
+                <button onClick={async () => {
+                  if (confirm('确认删除此模型?')) {
+                    await deleteModel(model.id);
+                    await reloadData(user);
+                    resetNotice('模型已删除');
+                  }
+                }}>删除</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>提示词模板</h2>
+        {user.role === 'admin' && (
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await createPrompt({
+                name: newPromptName,
+                purpose: newPromptPurpose,
+                content: newPromptContent,
+                isBuiltIn: false,
+                usageCount: 0
+              });
+              setNewPromptName('');
+              setNewPromptContent('');
+              await reloadData(user);
+              resetNotice('提示词模板已添加');
+            } catch (err) {
+              setError((err as Error).message);
+            }
+          }} className="form-grid">
+            <label>
+              模板名称
+              <input value={newPromptName} onChange={(e) => setNewPromptName(e.target.value)} required />
+            </label>
+            <label>
+              用途
+              <select value={newPromptPurpose} onChange={(e) => setNewPromptPurpose(e.target.value as any)}>
+                <option value="pocket-money">零花钱助手</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label>
+              模板内容
+              <textarea value={newPromptContent} onChange={(e) => setNewPromptContent(e.target.value)} required style={{ minHeight: '150px' }} />
+            </label>
+            <button type="submit">添加模板</button>
+          </form>
+        )}
+        <div className="list">
+          {prompts.map((prompt) => (
+            <div className="sub-card" key={prompt.id}>
+              <p><strong>{prompt.name}</strong> ({prompt.purpose})</p>
+              <p>{prompt.content.substring(0, 100)}...</p>
+              {user.role === 'admin' && (
+                <button onClick={async () => {
+                  if (confirm('确认删除此模板?')) {
+                    await deletePrompt(prompt.id);
+                    await reloadData(user);
+                    resetNotice('模板已删除');
+                  }
+                }}>删除</button>
+              )}
             </div>
           ))}
         </div>
