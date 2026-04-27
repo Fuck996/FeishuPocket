@@ -28,7 +28,44 @@ const app = express();
 
 const host = process.env.HOST ?? '0.0.0.0';
 const port = Number(process.env.PORT ?? 3000);
-const jwtSecret = process.env.JWT_SECRET ?? 'change-this-in-production';
+
+// JWT Secret 智能化处理：初始化函数确保总是返回有效值
+function initializeJwtSecret(): string {
+  const jwtSecretPath = path.resolve(__dirname, '../data/.jwt-secret');
+  
+  // 1. 优先从环境变量读取
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET;
+  }
+  
+  // 2. 读取持久化文件
+  try {
+    if (fs.existsSync(jwtSecretPath)) {
+      const secret = fs.readFileSync(jwtSecretPath, 'utf-8').trim();
+      console.log('[Init] Loaded persisted JWT secret from .jwt-secret');
+      return secret;
+    }
+  } catch (error) {
+    console.warn('[Warn] Failed to read .jwt-secret file:', error);
+  }
+  
+  // 3. 首次启动，生成新密钥
+  try {
+    const secret = crypto.randomBytes(32).toString('base64');
+    fs.mkdirSync(path.dirname(jwtSecretPath), { recursive: true });
+    fs.writeFileSync(jwtSecretPath, secret, { mode: 0o600 });
+    console.log('[Init] Generated new JWT secret and persisted to .jwt-secret');
+    return secret;
+  } catch (error) {
+    console.error('[ERROR] Failed to generate JWT secret:', error);
+    const fallback = 'fallback-' + crypto.randomBytes(16).toString('hex');
+    console.warn('[Warn] Using temporary fallback secret, tokens may not persist across restarts');
+    return fallback;
+  }
+}
+
+const jwtSecret = initializeJwtSecret();
+
 const databasePath = process.env.DATABASE_PATH ?? path.resolve(__dirname, '../data/store.json');
 const frontendDistPath = path.resolve(__dirname, '../public');
 

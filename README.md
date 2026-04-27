@@ -45,18 +45,53 @@ set BACKEND_URL=http://localhost:3000
 npm start
 
 ## 容器部署（单容器）
+
+### 快速开始
+
 使用根目录 docker-compose.yml：
 
-docker compose pull
+```bash
+# 1. 复制环境变量示例
+cp .env.example .env
+
+# 2. 编辑 .env，填入必要配置：
+#    - JWT_SECRET：强随机密钥（执行 openssl rand -base64 32 生成）
+#    - FEISHU_WEBHOOK_URL：飞书群机器人回调地址
+#    - DEEPSEEK_API_KEY：DeepSeek API 密钥（可选）
+
+# 3. 启动容器（首次）
 docker compose up -d
 
+# 4. 初始化管理员（仅首次，容器日志可查看状态）
+curl -X POST http://localhost:45174/api/init-admin \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your-secure-password"}'
+```
+
+### 后续更新
+
+数据和 JWT 密钥已持久化到 `./data` 目录，重新部署时数据不丢失：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### 数据持久化结构
+
+```
+./data/
+  store.json        # 所有业务数据（小孩、消费、配置等）
+  .jwt-secret       # JWT 密钥（首次启动自动生成）
+./config/
+  # 预留目录，可放置自定义配置文件
+```
+
 ### GitHub 直接构建镜像
+
 1. 在 GitHub Actions 执行工作流 Build & Push Images。
 2. 填写 image_tag（例如 v0.2.1）并执行。
-3. 群晖 .env 中设置：
-
-IMAGE_NAMESPACE=你的GitHub用户名或组织名（小写）
-IMAGE_TAG=v0.2.1
+3. 更新 .env 中的 IMAGE_TAG=v0.2.1（或对应版本）。
 
 详细步骤见 docs/SYNOLOGY_DEPLOYMENT.md。
 

@@ -19,6 +19,9 @@ COPY --from=backend-build /app/backend/dist ./dist
 COPY --from=backend-build /app/backend/node_modules ./node_modules
 COPY --from=backend-build /app/backend/package.json ./package.json
 COPY --from=frontend-build /app/frontend/dist ./public
-RUN mkdir -p data
+
+# 创建数据和配置目录，设置可写权限
+RUN mkdir -p data config && chmod -R 777 data config
+
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

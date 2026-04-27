@@ -2,23 +2,33 @@ version: '3.9'
 services:
   app:
     container_name: feishu-pocket
-    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-fuck996}/feishu-pocket:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_NAMESPACE:-Fuck996}/feishu-pocket:${IMAGE_TAG:-v0.2.1}
     restart: unless-stopped
-    environment:
-      PORT: 3000
-      HOST: 0.0.0.0
-      JWT_SECRET: ${JWT_SECRET:-please-change-in-production}
-      DATABASE_PATH: /app/data/store.json
-      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      TZ: ${TZ:-Asia/Shanghai}
-    volumes:
-      - feishu-pocket-data:/app/data
     ports:
       - "${APP_PORT:-45174}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_PATH=/app/data/store.json
+      - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      # 数据持久化 - 避免每次更新都丢失
+      - ./data:/app/data
+      # 配置文件目录 - 预留
+      - ./config:/app/config
+    networks:
+      - feishu-network
 
 volumes:
-  feishu-pocket-data:
+  data:
     driver: local
+  config:
+    driver: local
+
+networks:
+  feishu-network:
+    driver: bridge
