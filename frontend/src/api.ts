@@ -154,6 +154,14 @@ export async function createModel(payload: Omit<ModelConfig, 'id' | 'createdAt' 
   return result.data;
 }
 
+export async function discoverModels(provider: ModelConfig['provider'], apiUrl: string, apiKey: string): Promise<string[]> {
+  const result = await request<{ success: true; data: string[] }>('/api/models/discover', {
+    method: 'POST',
+    body: JSON.stringify({ provider, apiUrl, apiKey })
+  });
+  return result.data;
+}
+
 export async function updateModel(id: string, payload: Partial<ModelConfig>): Promise<ModelConfig> {
   const result = await request<{ success: true; data: ModelConfig }>(`/api/models/${id}`, {
     method: 'PUT',

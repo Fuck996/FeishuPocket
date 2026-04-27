@@ -56,7 +56,7 @@ export interface ModelConfig {
 export interface PromptTemplate {
   id: string;
   name: string;
-  purpose: 'pocket-money' | 'custom';
+  purpose: 'pocket-money' | 'vscode-chat' | 'daily' | 'weekly' | 'incident' | 'optimization' | 'custom';
   content: string;
   isBuiltIn: boolean;
   usageCount: number;

@@ -15,7 +15,7 @@ import { sendFeishuCard } from './feishu.js';
 import { SchedulerService } from './scheduler.js';
 import { JsonStore } from './store.js';
 import { checkAllModelBalances } from './modelBalance.js';
-import { ChildProfile, MoneyTransaction, ParsedBotAction, UserAccount, UserRole, WeeklySummary, ModelConfig, PromptTemplate } from './types.js';
+import { ChildProfile, MoneyTransaction, ParsedBotAction, UserAccount, UserRole, WeeklySummary, ModelConfig, ModelProvider, PromptTemplate } from './types.js';
 
 type AuthedRequest = Request & {
   authUser?: UserAccount;
@@ -210,6 +210,89 @@ function inferSuggestion(increasedAmount: number, expenseAmount: number, remaini
     return '本周结余较高，可以设立一个小目标，把结余分成储蓄和奖励两部分。';
   }
   return '本周消费与收入较平衡，建议继续保持，并记录高频消费原因。';
+}
+
+function normalizeApiUrl(provider: ModelProvider, apiUrl: string): string {
+  const trimmed = apiUrl.trim().replace(/\/+$/, '');
+
+  if ((provider === 'deepseek' || provider === 'openai') && trimmed.endsWith('/v1')) {
+    return trimmed.slice(0, -3);
+  }
+
+  return trimmed;
+}
+
+function buildModelListEndpoint(provider: ModelProvider, apiUrl: string): string {
+  const normalized = normalizeApiUrl(provider, apiUrl);
+
+  if (provider === 'google') {
+    return `${normalized}/v1beta/models`;
+  }
+
+  if (provider === 'deepseek' || provider === 'openai') {
+    return `${normalized}/v1/models`;
+  }
+
+  return `${normalized}/models`;
+}
+
+async function discoverProviderModels(provider: ModelProvider, apiUrl: string, apiKey: string): Promise<string[]> {
+  const endpoint = buildModelListEndpoint(provider, apiUrl);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  if (provider === 'google') {
+    headers['x-goog-api-key'] = apiKey;
+  } else {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(endpoint, { method: 'GET', headers });
+  if (!response.ok) {
+    throw new Error(`模型列表获取失败 (${response.status})`);
+  }
+
+  const data = (await response.json()) as {
+    data?: Array<{ id?: string }>;
+    models?: Array<{ name?: string }>;
+  };
+
+  const list = provider === 'google'
+    ? (data.models ?? []).map((item) => String(item.name ?? '').replace(/^models\//, '').trim())
+    : (data.data ?? []).map((item) => String(item.id ?? '').trim());
+
+  return Array.from(new Set(list.filter(Boolean))).sort((left, right) => left.localeCompare(right));
+}
+
+function resolveParserModelConfig(): { apiKey?: string; apiUrl?: string; modelId?: string } {
+  const models = store.getAllModels();
+
+  const preferredDeepSeek = models.find((item) =>
+    item.provider === 'deepseek' && item.isBuiltIn && item.apiKey && item.modelId
+  );
+  if (preferredDeepSeek) {
+    return {
+      apiKey: preferredDeepSeek.apiKey,
+      apiUrl: normalizeApiUrl(preferredDeepSeek.provider, preferredDeepSeek.apiUrl),
+      modelId: preferredDeepSeek.modelId
+    };
+  }
+
+  const fallback = models.find((item) => item.apiKey && item.modelId);
+  if (fallback) {
+    return {
+      apiKey: fallback.apiKey,
+      apiUrl: normalizeApiUrl(fallback.provider, fallback.apiUrl),
+      modelId: fallback.modelId
+    };
+  }
+
+  return {
+    apiKey: process.env.OPENAI_API_KEY,
+    apiUrl: process.env.OPENAI_BASE_URL,
+    modelId: process.env.OPENAI_MODEL
+  };
 }
 
 function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
@@ -888,7 +971,8 @@ app.post('/api/feishu/webhook', async (req: AuthedRequest, res) => {
     text = contentRaw;
   }
 
-  const action = await parseBotAction(text, process.env.OPENAI_API_KEY, process.env.OPENAI_BASE_URL, process.env.OPENAI_MODEL);
+  const parserModel = resolveParserModelConfig();
+  const action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
   if (action.intent === 'unknown') {
     res.json({ success: true, ignored: true, reason: 'unrecognized' });
     return;
@@ -1067,6 +1151,35 @@ app.get('/api/dashboard', requireAuth, (req: AuthedRequest, res) => {
 });
 
 // ===== Model Config APIs =====
+app.post('/api/models/discover', requireAuth, requireRole('admin'), async (req: AuthedRequest, res) => {
+  const { provider, apiUrl, apiKey } = req.body as {
+    provider?: ModelProvider;
+    apiUrl?: string;
+    apiKey?: string;
+  };
+
+  if (!provider || !apiUrl || !apiKey) {
+    res.status(400).json({ success: false, error: 'provider、apiUrl、apiKey 必填' });
+    return;
+  }
+
+  if (!['deepseek', 'openai', 'google', 'custom'].includes(provider)) {
+    res.status(400).json({ success: false, error: '不支持的 provider' });
+    return;
+  }
+
+  try {
+    const models = await discoverProviderModels(provider, apiUrl, apiKey);
+    if (models.length === 0) {
+      res.status(400).json({ success: false, error: '成功连接但未获取到模型列表' });
+      return;
+    }
+    res.json({ success: true, data: models });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : '获取模型列表失败' });
+  }
+});
+
 app.get('/api/models', requireAuth, (req: AuthedRequest, res) => {
   const models = store.getAllModels();
   // 脱敏 API Key

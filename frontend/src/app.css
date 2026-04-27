@@ -72,6 +72,30 @@ body {
   font-size: 18px;
 }
 
+.section-nav-card {
+  padding: 10px;
+}
+
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.section-nav button {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid #d1d5db;
+  font-weight: 600;
+  padding: 8px 10px;
+}
+
+.section-nav button.active {
+  background: linear-gradient(130deg, var(--accent), #fb923c);
+  color: #fff;
+  border-color: transparent;
+}
+
 .form-grid,
 .inline-grid {
   display: grid;

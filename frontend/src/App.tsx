@@ -4,6 +4,7 @@ import {
   adjustChild,
   bindFeishu,
   createChild,
+  discoverModels,
   createOperator,
   createModel,
   createPrompt,
@@ -43,6 +44,13 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function App() {
+  const defaultApiUrlByProvider: Record<ModelConfig['provider'], string> = {
+    deepseek: 'https://api.deepseek.com',
+    openai: 'https://api.openai.com',
+    google: 'https://generativelanguage.googleapis.com',
+    custom: ''
+  };
+
   const [user, setUser] = useState<UserInfo | null>(null);
   const [children, setChildren] = useState<ChildProfile[]>([]);
   const [operators, setOperators] = useState<OperatorUser[]>([]);
@@ -71,13 +79,16 @@ function App() {
 
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [prompts, setPrompts] = useState<PromptTemplate[]>([]);
+  const [activeTab, setActiveTab] = useState<'children' | 'operators' | 'settings' | 'transactions' | 'models' | 'prompts' | 'summaries'>('children');
   const [newModelName, setNewModelName] = useState('');
-  const [newModelProvider, setNewModelProvider] = useState<'openai' | 'deepseek' | 'google' | 'custom'>('openai');
-  const [newModelUrl, setNewModelUrl] = useState('https://api.openai.com');
+  const [newModelProvider, setNewModelProvider] = useState<'openai' | 'deepseek' | 'google' | 'custom'>('deepseek');
+  const [newModelUrl, setNewModelUrl] = useState('https://api.deepseek.com');
   const [newModelKey, setNewModelKey] = useState('');
-  const [newModelId, setNewModelId] = useState('gpt-4');
+  const [newModelId, setNewModelId] = useState('');
+  const [discoveredModelIds, setDiscoveredModelIds] = useState<string[]>([]);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
   const [newPromptName, setNewPromptName] = useState('');
-  const [newPromptPurpose, setNewPromptPurpose] = useState<'pocket-money' | 'custom'>('pocket-money');
+  const [newPromptPurpose, setNewPromptPurpose] = useState<'pocket-money' | 'vscode-chat' | 'daily' | 'weekly' | 'incident' | 'optimization' | 'custom'>('vscode-chat');
   const [newPromptContent, setNewPromptContent] = useState('');
 
   const childMap = useMemo(() => {
@@ -240,6 +251,27 @@ function App() {
     }
   }
 
+  async function onDiscoverProviderModels(): Promise<void> {
+    if (!newModelKey.trim()) {
+      setError('请先填写 API Key');
+      return;
+    }
+
+    setDiscoveringModels(true);
+    try {
+      const modelsFromProvider = await discoverModels(newModelProvider, newModelUrl, newModelKey);
+      setDiscoveredModelIds(modelsFromProvider);
+      if (!newModelId && modelsFromProvider.length > 0) {
+        setNewModelId(modelsFromProvider[0]);
+      }
+      resetNotice(`已获取 ${modelsFromProvider.length} 个模型`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDiscoveringModels(false);
+    }
+  }
+
   if (!user) {
     const showInitCard = adminInitialized === false;
     const showLoginCard = adminInitialized === true;
@@ -312,9 +344,22 @@ function App() {
         </button>
       </div>
 
+      <section className="card section-nav-card">
+        <div className="section-nav">
+          <button className={activeTab === 'children' ? 'active' : ''} onClick={() => setActiveTab('children')}>小孩</button>
+          {user.role === 'admin' && <button className={activeTab === 'operators' ? 'active' : ''} onClick={() => setActiveTab('operators')}>操作员</button>}
+          <button className={activeTab === 'settings' ? 'active' : ''} onClick={() => setActiveTab('settings')}>系统配置</button>
+          <button className={activeTab === 'transactions' ? 'active' : ''} onClick={() => setActiveTab('transactions')}>流水</button>
+          <button className={activeTab === 'models' ? 'active' : ''} onClick={() => setActiveTab('models')}>模型</button>
+          <button className={activeTab === 'prompts' ? 'active' : ''} onClick={() => setActiveTab('prompts')}>模板</button>
+          <button className={activeTab === 'summaries' ? 'active' : ''} onClick={() => setActiveTab('summaries')}>周报</button>
+        </div>
+      </section>
+
       {error && <p className="notice error">{error}</p>}
       {message && <p className="notice ok">{message}</p>}
 
+      {activeTab === 'children' && (
       <section className="card">
         <h2>小孩与余额</h2>
         <div className="list">
@@ -342,8 +387,9 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
-      {user.role === 'admin' && (
+      {activeTab === 'children' && user.role === 'admin' && (
         <section className="card">
           <h2>新增小孩</h2>
           <form onSubmit={onCreateChild} className="form-grid">
@@ -366,7 +412,7 @@ function App() {
         </section>
       )}
 
-      {user.role === 'admin' && (
+      {activeTab === 'operators' && user.role === 'admin' && (
         <section className="card">
           <h2>操作用户管理</h2>
           <form onSubmit={onCreateOperator} className="form-grid">
@@ -420,6 +466,7 @@ function App() {
         </section>
       )}
 
+      {activeTab === 'settings' && (
       <section className="card">
         <h2>系统配置</h2>
         <form onSubmit={onBindFeishu} className="form-grid">
@@ -444,7 +491,9 @@ function App() {
           </form>
         )}
       </section>
+      )}
 
+      {activeTab === 'transactions' && (
       <section className="card">
         <h2>记账流水</h2>
         <div className="list">
@@ -460,7 +509,9 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
+      {activeTab === 'models' && (
       <section className="card">
         <h2>模型配置</h2>
         {user.role === 'admin' && (
@@ -490,7 +541,13 @@ function App() {
             </label>
             <label>
               服务商
-              <select value={newModelProvider} onChange={(e) => setNewModelProvider(e.target.value as any)}>
+              <select value={newModelProvider} onChange={(e) => {
+                const provider = e.target.value as ModelConfig['provider'];
+                setNewModelProvider(provider);
+                setNewModelUrl(defaultApiUrlByProvider[provider]);
+                setDiscoveredModelIds([]);
+                setNewModelId('');
+              }}>
                 <option value="openai">OpenAI</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="google">Google</option>
@@ -505,9 +562,22 @@ function App() {
               API Key
               <input type="password" value={newModelKey} onChange={(e) => setNewModelKey(e.target.value)} required />
             </label>
+            <button type="button" onClick={onDiscoverProviderModels} disabled={discoveringModels}>
+              {discoveringModels ? '获取中...' : '通过 APIKey+地址 获取模型列表'}
+            </button>
+            {discoveredModelIds.length > 0 && (
+              <label>
+                模型列表（自动发现）
+                <select value={newModelId} onChange={(e) => setNewModelId(e.target.value)}>
+                  {discoveredModelIds.map((modelId) => (
+                    <option key={modelId} value={modelId}>{modelId}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
-              模型ID
-              <input value={newModelId} onChange={(e) => setNewModelId(e.target.value)} />
+              模型ID（可手填，可覆盖自动发现）
+              <input value={newModelId} onChange={(e) => setNewModelId(e.target.value)} required />
             </label>
             <button type="submit">添加模型</button>
           </form>
@@ -531,7 +601,9 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
+      {activeTab === 'prompts' && (
       <section className="card">
         <h2>提示词模板</h2>
         {user.role === 'admin' && (
@@ -560,6 +632,11 @@ function App() {
             <label>
               用途
               <select value={newPromptPurpose} onChange={(e) => setNewPromptPurpose(e.target.value as any)}>
+                <option value="vscode-chat">工作总结</option>
+                <option value="daily">日报快报</option>
+                <option value="weekly">周报总结</option>
+                <option value="incident">事件报告</option>
+                <option value="optimization">优化建议</option>
                 <option value="pocket-money">零花钱助手</option>
                 <option value="custom">自定义</option>
               </select>
@@ -589,7 +666,9 @@ function App() {
           ))}
         </div>
       </section>
+      )}
 
+      {activeTab === 'summaries' && (
       <section className="card">
         <h2>每周统计</h2>
         <div className="list">
@@ -606,6 +685,7 @@ function App() {
           ))}
         </div>
       </section>
+      )}
     </div>
   );
 }

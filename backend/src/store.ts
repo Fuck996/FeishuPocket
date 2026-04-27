@@ -4,6 +4,51 @@ import { randomUUID } from 'node:crypto';
 
 import { AppStore, ModelConfig, PromptTemplate } from './types.js';
 
+const BUILT_IN_DEEPSEEK_MODEL_ID = 'built-in-deepseek';
+
+const BUILT_IN_MCP_PROMPTS: Array<Omit<PromptTemplate, 'createdAt' | 'updatedAt'>> = [
+  {
+    id: 'vscode-chat-report',
+    name: '工作总结',
+    purpose: 'vscode-chat',
+    content: `你是一个专业的工作总结专家。请根据本次任务内容生成一份清晰的工作总结。\n\n总结格式要求：\n1. ✅ 已完成的工作\n2. 🔧 关键改动\n3. 📝 后续说明\n\n要求：简洁、准确，便于团队快速同步。`,
+    isBuiltIn: true,
+    usageCount: 0
+  },
+  {
+    id: 'daily-digest',
+    name: '日报快报',
+    purpose: 'daily',
+    content: `你是一个日报编辑。请根据输入生成当日简报，包含重点事项、数据统计、明日计划。\n\n要求：结构清晰，字数控制在300字以内。`,
+    isBuiltIn: true,
+    usageCount: 0
+  },
+  {
+    id: 'weekly-summary',
+    name: '周报总结',
+    purpose: 'weekly',
+    content: `你是一个周报助手。请生成本周目标完成度、主要成就、挑战与下周计划。\n\n要求：强调可量化结果。`,
+    isBuiltIn: true,
+    usageCount: 0
+  },
+  {
+    id: 'incident-report',
+    name: '事件报告',
+    purpose: 'incident',
+    content: `你是事件管理专家。请按事件背景、影响范围、根因、处理过程、后续措施输出事件报告。`,
+    isBuiltIn: true,
+    usageCount: 0
+  },
+  {
+    id: 'optimization-suggestion',
+    name: '优化建议',
+    purpose: 'optimization',
+    content: `你是产品优化顾问。请基于输入给出可执行的优化方案、预期收益与实施计划。`,
+    isBuiltIn: true,
+    usageCount: 0
+  }
+];
+
 const DEFAULT_STORE: AppStore = {
   users: [],
   children: [],
@@ -34,6 +79,7 @@ export class JsonStore {
 
     if (!fs.existsSync(this.filePath)) {
       this.data = structuredClone(DEFAULT_STORE);
+      this.ensureBuiltInItems();
       this.save();
       return this.data;
     }
@@ -54,7 +100,85 @@ export class JsonStore {
         lastDailyGrantDate: parsed.config?.lastDailyGrantDate
       }
     };
+
+    // 增量补齐内置模型与提示词，避免破坏已有用户数据。
+    const changed = this.ensureBuiltInItems();
+    if (changed) {
+      this.save();
+    }
     return this.data;
+  }
+
+  private ensureBuiltInItems(): boolean {
+    const modelChanged = this.ensureBuiltInDeepSeekModel();
+    const promptChanged = this.ensureBuiltInMcpPrompts();
+    return modelChanged || promptChanged;
+  }
+
+  private ensureBuiltInDeepSeekModel(): boolean {
+    const now = new Date().toISOString();
+    const existing = this.data.models.find((model) => model.id === BUILT_IN_DEEPSEEK_MODEL_ID);
+
+    if (existing) {
+      const before = JSON.stringify({
+        name: existing.name,
+        provider: existing.provider,
+        apiUrl: existing.apiUrl,
+        isBuiltIn: existing.isBuiltIn,
+        status: existing.status
+      });
+      existing.name = 'DeepSeek';
+      existing.provider = 'deepseek';
+      existing.apiUrl = 'https://api.deepseek.com';
+      existing.isBuiltIn = true;
+      existing.updatedAt = now;
+      if (!existing.status) {
+        existing.status = 'unconfigured';
+      }
+      const after = JSON.stringify({
+        name: existing.name,
+        provider: existing.provider,
+        apiUrl: existing.apiUrl,
+        isBuiltIn: existing.isBuiltIn,
+        status: existing.status
+      });
+      return before !== after;
+    }
+
+    this.data.models.unshift({
+      id: BUILT_IN_DEEPSEEK_MODEL_ID,
+      name: 'DeepSeek',
+      provider: 'deepseek',
+      apiUrl: 'https://api.deepseek.com',
+      apiKey: undefined,
+      modelId: undefined,
+      isBuiltIn: true,
+      status: 'unconfigured',
+      createdAt: now,
+      updatedAt: now
+    });
+    return true;
+  }
+
+  private ensureBuiltInMcpPrompts(): boolean {
+    const now = new Date().toISOString();
+    let changed = false;
+
+    for (const builtInPrompt of BUILT_IN_MCP_PROMPTS) {
+      const existing = this.data.prompts.find((item) => item.id === builtInPrompt.id);
+      if (existing) {
+        continue;
+      }
+
+      this.data.prompts.push({
+        ...builtInPrompt,
+        createdAt: now,
+        updatedAt: now
+      });
+      changed = true;
+    }
+
+    return changed;
   }
 
   public getSnapshot(): AppStore {

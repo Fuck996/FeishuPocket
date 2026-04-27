@@ -88,7 +88,7 @@ export interface ModelConfig {
 export interface PromptTemplate {
   id: string;
   name: string; // 模板名称
-  purpose: 'pocket-money' | 'custom'; // 用途
+  purpose: 'pocket-money' | 'vscode-chat' | 'daily' | 'weekly' | 'incident' | 'optimization' | 'custom'; // 用途
   content: string; // 模板内容
   isBuiltIn: boolean; // 是否内置模板
   usageCount: number; // 使用次数
