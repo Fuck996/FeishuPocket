@@ -304,6 +304,12 @@ function AppIcon(props: { name: string; size?: number; className?: string }) {
           <path d="M15 6l-6 6 6 6" />
         </svg>
       );
+    case 'chevron-down':
+      return (
+        <svg {...common}>
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      );
     case 'success':
       return (
         <svg {...common}>
@@ -397,6 +403,8 @@ function App() {
   const [discoveringModels, setDiscoveringModels] = useState(false);
   const [modelPageView, setModelPageView] = useState<ModelPageView>('list');
   const [mcpExpanded, setMcpExpanded] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   const [promptDraft, setPromptDraft] = useState<PromptDraft>(createPromptDraft());
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
@@ -461,6 +469,17 @@ function App() {
   const selectedChild = useMemo(() => {
     return childView.mode === 'edit' ? children.find((item) => item.id === childView.childId) ?? null : null;
   }, [childView, children]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    function handleOutside(event: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [userMenuOpen]);
 
   useEffect(() => {
     return () => {
@@ -1757,9 +1776,13 @@ function App() {
       <div className="auth-shell">
         <div className="auth-panel">
           <div className="auth-panel__hero">
-            <p className="section-eyebrow">Feishu Pocket</p>
-            <h1>零花钱助手后台</h1>
-            <p>按统一层级重构后的移动管理面板，先登录，再配置模型、机器人与孩子。</p>
+            <div className="auth-brand">
+              <img src="/favicon.svg" alt="飞书零花钱助手" className="auth-brand__icon" />
+              <div>
+                <p className="section-eyebrow">Feishu Pocket</p>
+                <h1>零花钱助手后台</h1>
+              </div>
+            </div>
           </div>
 
           {showInitCard && (
@@ -1813,23 +1836,36 @@ function App() {
           <p className="section-eyebrow">Pocket Console</p>
           <h1>飞书零花钱助手</h1>
         </div>
-        <div className="topbar-card__actions">
-          <div className="user-chip">
-            <span className="user-chip__dot" />
-            <span>{user.role === 'admin' ? '管理员' : '成员'} · {user.username}</span>
-          </div>
+        <div ref={userMenuRef} className="topbar-user-menu">
           <button
             type="button"
-            className="icon-text-button"
-            onClick={() => {
-              logout();
-              setUser(null);
-              showNotice('已退出登录', 'info');
-            }}
+            className="user-chip user-chip--button"
+            onClick={() => setUserMenuOpen(!userMenuOpen)}
+            aria-expanded={userMenuOpen ? 'true' : 'false'}
+            aria-haspopup="true"
           >
-            <AppIcon name="logout" size={18} />
-            <span>退出</span>
+            <span className="user-chip__dot" />
+            <span>{user.role === 'admin' ? '管理员' : '成员'} · {user.username}</span>
+            <AppIcon name="chevron-down" size={14} className={userMenuOpen ? 'user-chip__chevron is-open' : 'user-chip__chevron'} />
           </button>
+          {userMenuOpen && (
+            <div className="topbar-user-dropdown" role="menu">
+              <button
+                type="button"
+                className="icon-text-button topbar-user-dropdown__item"
+                role="menuitem"
+                onClick={() => {
+                  logout();
+                  setUser(null);
+                  setUserMenuOpen(false);
+                  showNotice('已退出登录', 'info');
+                }}
+              >
+                <AppIcon name="logout" size={17} />
+                <span>退出登录</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 

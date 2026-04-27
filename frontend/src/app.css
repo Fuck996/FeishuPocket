@@ -425,10 +425,82 @@ button:disabled {
 }
 
 .user-chip {
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.74);
   color: var(--text-sub);
+}
+
+.user-chip--button {
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.user-chip--button:hover {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.user-chip__chevron {
+  opacity: 0.55;
+  transition: transform 0.2s;
+}
+
+.user-chip__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* 用户菜单下拉 */
+.topbar-user-menu {
+  position: relative;
+}
+
+.topbar-user-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 130px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  padding: 6px;
+  box-shadow: 0 8px 32px rgba(69, 42, 17, 0.18);
+  backdrop-filter: blur(16px);
+}
+
+.topbar-user-dropdown__item {
+  width: 100%;
+  justify-content: flex-start;
+  border-radius: 12px;
+  padding: 9px 12px;
+  color: var(--text-primary);
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.topbar-user-dropdown__item:hover {
+  background: rgba(214, 107, 44, 0.08);
+  color: var(--brand);
+  box-shadow: none;
+}
+
+/* 登录页品牌区 */
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-brand__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  flex-shrink: 0;
 }
 
 .user-chip__dot {
