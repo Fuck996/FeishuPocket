@@ -21,14 +21,14 @@ export function buildCardSchema(payload) {
         tag: 'markdown',
         content: line
     }));
-    // 每个按钮独立放入 body elements，使用 request_callback 行为触发新版回调
+    // 每个按钮独立放入 body elements，使用 value 回传给 card.action.trigger
     if (payload.actions?.length) {
         for (const action of payload.actions) {
             elements.push({
                 tag: 'button',
                 text: { tag: 'plain_text', content: action.text },
                 type: action.type,
-                behaviors: [{ type: 'request_callback', value: action.value }]
+                value: action.value
             });
         }
     }
