@@ -54,19 +54,32 @@ npm start
 # 1. 复制环境变量示例
 cp .env.example .env
 
-# 2. 编辑 .env，填入必要配置：
+# 2. 编辑 .env，仅填入 JWT_SECRET：
 #    - JWT_SECRET：强随机密钥（执行 openssl rand -base64 32 生成）
-#    - FEISHU_WEBHOOK_URL：飞书群机器人回调地址
-#    - DEEPSEEK_API_KEY：DeepSeek API 密钥（可选）
+#    - 其他配置都是可选的
 
 # 3. 启动容器（首次）
 docker compose up -d
 
-# 4. 初始化管理员（仅首次，容器日志可查看状态）
+# 4. 初始化管理员（仅首次）
 curl -X POST http://localhost:45174/api/init-admin \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"your-secure-password"}'
+
+# 5. 登录并在 UI 中配置：
+#    - 飞书群机器人 webhook（在管理后台）
+#    - AI 模型配置：DeepSeek API key（在模型管理页面）
+#    - 其他小孩、奖励规则等
 ```
+
+### 配置项说明
+
+| 配置项 | 位置 | 说明 |
+|--------|------|------|
+| JWT 密钥 | `.env` 环变量 | 必填，首次启动自动持久化 |
+| 飞书 Webhook | 系统配置 API | 管理员在 UI 中设置 |
+| 模型 API Key | 模型管理页面 | 支持 DeepSeek、OpenAI、Google |
+| 小孩绑定 | 系统 UI | 与飞书用户关联 |
 
 ### 后续更新
 
