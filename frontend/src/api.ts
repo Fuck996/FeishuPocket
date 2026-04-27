@@ -125,6 +125,13 @@ export async function setRewardRule(childId: string, keyword: string, amount: nu
   });
 }
 
+export async function deleteRewardRule(childId: string, keyword: string): Promise<void> {
+  await request('/api/config/reward-rule', {
+    method: 'DELETE',
+    body: JSON.stringify({ childId, keyword })
+  });
+}
+
 export async function setWeeklyNotify(hour: number, minute: number): Promise<void> {
   await request('/api/config/weekly-notify', {
     method: 'PUT',

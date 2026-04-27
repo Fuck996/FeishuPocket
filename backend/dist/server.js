@@ -484,7 +484,7 @@ const scheduler = new SchedulerService({
     checkModelBalances
 }, snapshot.config.weeklyNotify.hour, snapshot.config.weeklyNotify.minute);
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.2.4' });
+    res.json({ success: true, version: '0.2.5' });
 });
 app.get('/api/setup-status', (_req, res) => {
     const adminInitialized = store.getSnapshot().users.some((item) => item.role === 'admin');
@@ -857,6 +857,26 @@ app.put('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req
         ]
     });
     res.json({ success: true, message: '设置成功' });
+});
+app.delete('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req, res) => {
+    const { childId, keyword } = req.body;
+    if (!childId || !keyword) {
+        res.status(400).json({ success: false, error: 'childId、keyword 必填' });
+        return;
+    }
+    const child = findChildById(childId);
+    if (!child) {
+        res.status(404).json({ success: false, error: '孩子不存在' });
+        return;
+    }
+    store.update((draft) => {
+        const c = draft.children.find((item) => item.id === childId);
+        if (!c)
+            return;
+        c.rewardRules = c.rewardRules.filter((item) => item.keyword !== keyword);
+        c.updatedAt = new Date().toISOString();
+    });
+    res.json({ success: true, message: '奖励规则已删除' });
 });
 app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (req, res) => {
     const { hour, minute } = req.body;

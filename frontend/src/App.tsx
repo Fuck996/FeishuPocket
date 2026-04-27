@@ -9,6 +9,7 @@ import {
   deleteChild,
   deleteModel,
   deletePrompt,
+  deleteRewardRule,
   deleteRobot,
   discoverModels,
   getChildren,
@@ -140,13 +141,12 @@ function formatMoney(amount: number): string {
 }
 
 function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const d = new Date(value);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}/${dd} ${hh}:${min}`;
 }
 
 function getTransactionTypeLabel(type: MoneyTransaction['type']): string {
@@ -732,6 +732,22 @@ function App() {
       await setRewardRule(childView.childId, childRewardKeyword.trim(), childRewardAmount);
       await reloadData(user);
       showNotice('奖励规则已更新');
+    } catch (error) {
+      handleRequestError(error);
+    }
+  }
+
+  async function handleDeleteRewardRule(keyword: string): Promise<void> {
+    if (!user || childView.mode !== 'edit') {
+      return;
+    }
+    if (!window.confirm(`确认删除奖励规则「${keyword}」吗？`)) {
+      return;
+    }
+    try {
+      await deleteRewardRule(childView.childId, keyword);
+      await reloadData(user);
+      showNotice('奖励规则已删除', 'warning');
     } catch (error) {
       handleRequestError(error);
     }
@@ -1601,8 +1617,8 @@ function App() {
               <div className="form-grid">
                 <div className="form-row">
                   <label>
-                    奖励项目
-                    <input value={childRewardKeyword} onChange={(event) => setChildRewardKeyword(event.target.value)} />
+                    奖励项目名称
+                    <input value={childRewardKeyword} onChange={(event) => setChildRewardKeyword(event.target.value)} placeholder="如：家务、阅读" />
                   </label>
                   <label>
                     奖励金额
@@ -1610,12 +1626,35 @@ function App() {
                   </label>
                 </div>
                 <button type="button" onClick={handleChildRewardRule}>保存奖励规则</button>
+                <span className="field-hint">输入项目名称和金额后点击保存，同名项目会自动覆盖；点击下方标签可加载到输入框进行编辑</span>
                 {selectedChild.rewardRules.length > 0 && (
                   <div className="chip-wrap">
                     {selectedChild.rewardRules.map((rule) => (
-                      <span key={rule.id} className="reward-chip">{rule.keyword} +{rule.amount}元</span>
+                      <span
+                        key={rule.id}
+                        className="reward-chip"
+                        title="点击编辑"
+                        onClick={() => {
+                          setChildRewardKeyword(rule.keyword);
+                          setChildRewardAmount(rule.amount);
+                        }}
+                      >
+                        <span>{rule.keyword} +{rule.amount}元</span>
+                        <button
+                          type="button"
+                          className="reward-chip__delete"
+                          title={`删除「${rule.keyword}」`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteRewardRule(rule.keyword);
+                          }}
+                        >×</button>
+                      </span>
                     ))}
                   </div>
+                )}
+                {selectedChild.rewardRules.length === 0 && (
+                  <div className="empty-card">还没有奖励规则，填写项目名称和金额后点击「保存奖励规则」添加。</div>
                 )}
               </div>
             </section>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none">
+  <rect width="180" height="180" rx="40" fill="#d66b2c"/>
+  <circle cx="90" cy="90" r="58" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.35)" stroke-width="2"/>
+  <text x="90" y="114" text-anchor="middle" font-size="74" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif" font-weight="700" fill="white">¥</text>
+</svg>
