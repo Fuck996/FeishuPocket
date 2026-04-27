@@ -996,10 +996,9 @@ app.post('/api/robots/:robotId/test', requireAuth, requireRole('admin'), async (
         res.status(500).json({ success: false, error: message });
     }
 });
-// 获取机器人可见的飞书群列表（调用飞书 im/v1/chats/search API）
+// 获取机器人所在的飞书群列表（调用飞书 im/v1/chats API，返回机器人实际加入的群）
 app.get('/api/robots/:robotId/chats', requireAuth, requireRole('admin'), async (req, res) => {
     const { robotId } = req.params;
-    const { query = '' } = req.query;
     const robot = store.getSnapshot().robots.find((r) => r.id === robotId);
     if (!robot) {
         res.status(404).json({ success: false, error: '机器人不存在' });
@@ -1021,22 +1020,27 @@ app.get('/api/robots/:robotId/chats', requireAuth, requireRole('admin'), async (
             res.status(400).json({ success: false, error: `获取飞书 token 失败：${tokenData.msg}` });
             return;
         }
-        // 第二步：搜索机器人可见的群列表
-        const params = new URLSearchParams({ page_size: '50' });
-        if (query)
-            params.set('query', query);
-        const chatResp = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/search?${params.toString()}`, {
-            headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
-        });
-        const chatData = await chatResp.json();
-        if (chatData.code !== 0) {
-            res.status(400).json({ success: false, error: `查询群列表失败：${chatData.msg}` });
-            return;
-        }
-        const items = (chatData.data?.items ?? []).map((item) => ({
-            chatId: item.chat_id,
-            name: item.name
-        }));
+        // 第二步：获取机器人实际加入的群列表（im/v1/chats，不需要 query 参数）
+        const allItems = [];
+        let pageToken;
+        do {
+            const params = new URLSearchParams({ page_size: '100' });
+            if (pageToken)
+                params.set('page_token', pageToken);
+            const chatResp = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats?${params.toString()}`, {
+                headers: { Authorization: `Bearer ${tokenData.tenant_access_token}` }
+            });
+            const chatData = await chatResp.json();
+            if (chatData.code !== 0) {
+                res.status(400).json({ success: false, error: `查询群列表失败：${chatData.msg}` });
+                return;
+            }
+            for (const item of chatData.data?.items ?? []) {
+                allItems.push(item);
+            }
+            pageToken = chatData.data?.has_more ? chatData.data.page_token : undefined;
+        } while (pageToken);
+        const items = allItems.map((item) => ({ chatId: item.chat_id, name: item.name }));
         res.json({ success: true, data: items });
     }
     catch (error) {

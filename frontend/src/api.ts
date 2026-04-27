@@ -190,9 +190,8 @@ export async function testRobot(robotId: string): Promise<{ message: string }> {
   return { message: result.message };
 }
 
-export async function getRobotChats(robotId: string, query?: string): Promise<Array<{ chatId: string; name: string }>> {
-  const params = query ? `?query=${encodeURIComponent(query)}` : '';
-  const result = await request<{ success: true; data: Array<{ chatId: string; name: string }> }>(`/api/robots/${robotId}/chats${params}`);
+export async function getRobotChats(robotId: string): Promise<Array<{ chatId: string; name: string }>> {
+  const result = await request<{ success: true; data: Array<{ chatId: string; name: string }> }>(`/api/robots/${robotId}/chats`);
   return result.data;
 }
 
