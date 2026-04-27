@@ -1215,7 +1215,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.21' });
+  res.json({ success: true, version: '0.3.22' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2262,7 +2262,29 @@ async function processBotMessage(
         if (!targetChild || !action.rewardKeyword) throw new Error('缺少参数');
         const child = findChildById(targetChild.id);
         const reward = child?.rewardRules.find((item) => item.keyword === action.rewardKeyword);
-        if (!reward) return null; // 无匹配奖励规则，忽略
+        if (!reward) {
+          const msgId = await sendRobotCard({
+            title: '❓ 未匹配到奖励规则',
+            lines: [
+              `**原始消息**：${text}`,
+              `**识别结果**：识别为奖励触发，但未找到“${action.rewardKeyword}”对应的奖励规则。`,
+              `**建议**：如果你的意思是直接调整余额，请使用“增加5元，因为表现良好”或“减少5元，因为录入错误”。`
+            ],
+            color: 'orange'
+          }, chatId, targetChild.id);
+          pushBotLog({
+            id: nanoid(),
+            robotId: robot.id,
+            time: new Date().toISOString(),
+            direction: 'out',
+            chatId,
+            messageId: msgId,
+            msgType: 'interactive',
+            cardTitle: '❓ 未匹配到奖励规则',
+            status: 'unrecognized'
+          });
+          return null;
+        }
         await applyTransaction({
           childId: targetChild.id,
           amount: Math.abs(reward.amount),

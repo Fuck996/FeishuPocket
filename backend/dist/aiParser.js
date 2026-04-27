@@ -52,7 +52,7 @@ function normalizeAction(action) {
     }
     return action;
 }
-function parseByRegex(message) {
+function tryParseBalanceAdjust(message) {
     const cleaned = message.replace(/[，。！？；、]/g, ' ').trim();
     const increaseA = cleaned.match(/(?:余额增加|增加|加上|加)\s*(\+?\d+(?:\.\d+)?)\s*(?:元|块)(?:\s*(?:因为|因|由于|原因|理由)\s*([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40}))?/);
     if (increaseA) {
@@ -60,6 +60,14 @@ function parseByRegex(message) {
             intent: 'increase_balance',
             amount: Math.abs(Number(increaseA[1])),
             reason: increaseA[2]?.trim()
+        };
+    }
+    const increaseReasonFirst = cleaned.match(/([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40})\s*(?:增加|加上|加|余额增加)\s*(\+?\d+(?:\.\d+)?)\s*(?:元|块)/);
+    if (increaseReasonFirst && !/(?:完成|做了|达成|搞定|做完)/.test(cleaned)) {
+        return {
+            intent: 'increase_balance',
+            amount: Math.abs(Number(increaseReasonFirst[2])),
+            reason: increaseReasonFirst[1]?.trim()
         };
     }
     const increaseB = cleaned.match(/^(?:余额增加|增加|加上|加)\s*(\+?\d+(?:\.\d+)?)$/);
@@ -77,12 +85,28 @@ function parseByRegex(message) {
             reason: decreaseA[2]?.trim()
         };
     }
+    const decreaseReasonFirst = cleaned.match(/([\u4e00-\u9fa5A-Za-z0-9_\-\s]{1,40})\s*(?:减少|减去|减|扣掉|扣除|余额减少)\s*(\-?\d+(?:\.\d+)?)\s*(?:元|块)/);
+    if (decreaseReasonFirst && !/(?:完成|做了|达成|搞定|做完)/.test(cleaned)) {
+        return {
+            intent: 'decrease_balance',
+            amount: Math.abs(Number(decreaseReasonFirst[2])),
+            reason: decreaseReasonFirst[1]?.trim()
+        };
+    }
     const decreaseB = cleaned.match(/^(?:余额减少|减少|减去|减|扣掉|扣除)\s*(\-?\d+(?:\.\d+)?)$/);
     if (decreaseB) {
         return {
             intent: 'decrease_balance',
             amount: Math.abs(Number(decreaseB[1]))
         };
+    }
+    return null;
+}
+function parseByRegex(message) {
+    const cleaned = message.replace(/[，。！？；、]/g, ' ').trim();
+    const balanceAdjustAction = tryParseBalanceAdjust(message);
+    if (balanceAdjustAction) {
+        return balanceAdjustAction;
     }
     const queryBalanceA = cleaned.match(/^(?:查询余额|查余额|余额|看余额|当前余额|现在余额)$/);
     if (queryBalanceA) {
@@ -243,6 +267,12 @@ export async function parseBotAction(message, openAiApiKey, openAiBaseUrl, model
         const parsed = normalizeAction(JSON.parse(jsonText));
         if (!parsed.intent) {
             return parseByRegex(message);
+        }
+        if (parsed.intent === 'reward_from_message') {
+            const balanceAdjustAction = tryParseBalanceAdjust(message);
+            if (balanceAdjustAction) {
+                return balanceAdjustAction;
+            }
         }
         return parsed;
     }
