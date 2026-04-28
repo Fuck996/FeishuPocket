@@ -1530,20 +1530,43 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     return;
   }
 
-  // 飞书菜单API是追加型，需要先删除旧菜单再创建新菜单
+  // 飞书 DELETE 接口必须传具体 ID，不能"清空所有"
+  // 需要先 GET 获取当前菜单 ID，再 DELETE 指定 ID，最后 POST 创建
   const menuUrl = `https://open.feishu.cn/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`;
   const authHeaders = {
     Authorization: `Bearer ${tenantAccessToken}`,
     'Content-Type': 'application/json; charset=utf-8'
   };
 
-  const deleteResponse = await fetch(menuUrl, { method: 'DELETE', headers: authHeaders });
-  const deleteRaw = await deleteResponse.text();
-  let deleteResult: { code?: number; msg?: string } = {};
-  try { deleteResult = deleteRaw ? JSON.parse(deleteRaw) as { code?: number; msg?: string } : {}; } catch { deleteResult = {}; }
-  // 删除失败不阻断流程（可能是本来就没有菜单）
-  if (deleteResult.code !== 0) {
-    console.warn(`[群菜单同步] 删除旧菜单返回：code=${deleteResult.code ?? 'N/A'} msg=${deleteResult.msg ?? deleteRaw.slice(0, 100)}`);
+  // 第一步：GET 获取现有菜单的 top_level_id 列表
+  const getResponse = await fetch(menuUrl, { method: 'GET', headers: authHeaders });
+  const getRaw = await getResponse.text();
+  type FeishuMenuGetResult = {
+    code?: number;
+    data?: { menu_tree?: { chat_menu_top_levels?: Array<{ chat_menu_top_level_id?: string }> } };
+  };
+  let getResult: FeishuMenuGetResult = {};
+  try { getResult = getRaw ? JSON.parse(getRaw) as FeishuMenuGetResult : {}; } catch { getResult = {}; }
+
+  const existingIds = (getResult.data?.menu_tree?.chat_menu_top_levels ?? [])
+    .map((item) => item.chat_menu_top_level_id)
+    .filter((id): id is string => Boolean(id));
+
+  // 第二步：若有旧菜单则按 ID 删除
+  if (existingIds.length > 0) {
+    const deleteResponse = await fetch(menuUrl, {
+      method: 'DELETE',
+      headers: authHeaders,
+      body: JSON.stringify({ chat_menu_top_level_ids: existingIds })
+    });
+    const deleteRaw = await deleteResponse.text();
+    let deleteResult: { code?: number; msg?: string } = {};
+    try { deleteResult = deleteRaw ? JSON.parse(deleteRaw) as { code?: number; msg?: string } : {}; } catch { deleteResult = {}; }
+    if (deleteResult.code !== 0) {
+      // 删除失败则终止，避免超限
+      throw new Error(`群菜单删除旧菜单失败：${deleteResult.msg ?? deleteRaw.slice(0, 200)}`);
+    }
+    console.log(`[群菜单同步] 已删除机器人 ${robot.name} chatId=${chatId} 的旧菜单 ${existingIds.length} 个`);
   }
 
   const response = await fetch(menuUrl, {
