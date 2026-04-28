@@ -1434,25 +1434,32 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<s
 
 function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<string, unknown> {
   // 飞书群菜单：2级结构，上限3个一级菜单，每个一级菜单最多5个子菜单
-  // 一级菜单使用 NONE 类型（纯标题，无跳转），子菜单使用 REDIRECT_LINK 类型
+  // 正确格式：每个菜单项包在 chat_menu_item 对象中，name 字段而非 chat_menu_item_name
+  // redirect_link 是对象 { common_url: "..." } 而非字符串
+  const makeLink = (name: string, url: string) => ({
+    chat_menu_item: {
+      action_type: 'REDIRECT_LINK',
+      name,
+      redirect_link: { common_url: url }
+    }
+  });
+
   return {
     menu_tree: {
       chat_menu_items: [
         {
-          action_type: 'NONE',
-          chat_menu_item_name: '控制中心',
+          chat_menu_item: { action_type: 'NONE', name: '控制中心' },
           children: [
-            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '控制台', redirect_link: linkMap['show_control_center'] },
-            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '快捷指令查询', redirect_link: linkMap['show_help_card'] },
-            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '查询余额', redirect_link: linkMap['query_balance'] }
+            makeLink('控制台', linkMap['show_control_center']),
+            makeLink('快捷指令查询', linkMap['show_help_card']),
+            makeLink('查询余额', linkMap['query_balance'])
           ]
         },
         {
-          action_type: 'NONE',
-          chat_menu_item_name: '数据统计',
+          chat_menu_item: { action_type: 'NONE', name: '数据统计' },
           children: [
-            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '月统计', redirect_link: linkMap['show_monthly_stats'] },
-            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '周统计', redirect_link: linkMap['show_weekly_stats'] }
+            makeLink('月统计', linkMap['show_monthly_stats']),
+            makeLink('周统计', linkMap['show_weekly_stats'])
           ]
         }
       ]
