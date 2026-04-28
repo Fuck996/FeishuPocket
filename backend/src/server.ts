@@ -590,10 +590,34 @@ function resolveFeishuSendTarget(chatIdOverride?: string): FeishuSendTarget {
 }
 
 async function sendRobotCard(payload: FeishuCardPayload, chatIdOverride?: string, childId?: string): Promise<string | undefined> {
+  const modelBalanceLine = buildModelBalanceLine();
+  const hasBalanceLine = payload.lines.some((line) => line.startsWith('**模型余额**：'));
+  const finalPayload: FeishuCardPayload = hasBalanceLine
+    ? payload
+    : {
+      ...payload,
+      lines: [...payload.lines, modelBalanceLine]
+    };
+
   const target = childId
     ? resolveFeishuTargetForChild(childId, chatIdOverride)
     : resolveFeishuSendTarget(chatIdOverride);
-  return await sendFeishuCard(target, payload);
+  return await sendFeishuCard(target, finalPayload);
+}
+
+function buildModelBalanceLine(): string {
+  const models = store.getAllModels().filter((model) => model.provider === 'deepseek');
+  if (models.length === 0) {
+    return '**模型余额**：暂无可用模型';
+  }
+
+  const parts = models.map((model) => {
+    if (typeof model.balance === 'number' && Number.isFinite(model.balance)) {
+      return `${model.name} ¥${model.balance.toFixed(2)}`;
+    }
+    return `${model.name} --`;
+  });
+  return `**模型余额**：${parts.join(' | ')}`;
 }
 
 function sanitizeUser(user: UserAccount) {
@@ -1576,7 +1600,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.41' });
+  res.json({ success: true, version: '0.3.42' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2476,7 +2500,11 @@ async function processBotMessage(
     const parserModel = resolveParserModelConfig();
     try {
       action = await parseBotAction(text, parserModel.apiKey, parserModel.apiUrl, parserModel.modelId);
+      // 每次调用 AI 后先刷新余额，再继续后续卡片发送，确保卡片尾部余额是最新值。
+      await checkModelBalances();
     } catch (err) {
+      // 即使 AI 调用失败，也先刷新余额再回传失败卡片。
+      await checkModelBalances();
       // AI 调用失败，更新入站日志状态，发送失败卡片
       const list = botLogs.get(primaryRobot.id);
       const inLog = list?.find((l) => l.id === inLogId);
@@ -2507,9 +2535,6 @@ async function processBotMessage(
       } catch { /* 通知失败不抛出 */ }
       throw err;
     }
-
-    // 仅 AI 路径下异步刷新余额，不阻塞主流程
-    void checkModelBalances();
   }
 
   if (!action) {
