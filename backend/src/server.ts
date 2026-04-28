@@ -1576,7 +1576,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.40' });
+  res.json({ success: true, version: '0.3.41' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {

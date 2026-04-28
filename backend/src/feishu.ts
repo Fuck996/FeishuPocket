@@ -65,8 +65,7 @@ export function buildCardSchema(payload: FeishuCardPayload): Record<string, unkn
             alt: { tag: 'plain_text', content: '头像' },
             mode: 'crop_center',
             corner_radius: '50%',
-            preview: false,
-            fixed_width: 36
+            preview: false
           }]
         },
         {
