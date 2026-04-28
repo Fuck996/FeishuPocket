@@ -12,6 +12,7 @@ services:
       - HOST=0.0.0.0
       - DATABASE_PATH=/app/data/store.json
       - TZ=${TZ:-Asia/Shanghai}
+      - MENU_BRIDGE_BASE_URL=${MENU_BRIDGE_BASE_URL:-}
     volumes:
       # 数据持久化 - 避免每次更新都丢失
       - ./data:/app/data
