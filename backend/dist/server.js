@@ -129,15 +129,18 @@ async function getFeishuTenantAccessToken(robot) {
             body: JSON.stringify({ app_id: robot.feishuAppId, app_secret: robot.feishuAppSecret })
         });
         if (!tokenResp.ok) {
+            console.warn(`[Token] 获取 tenant_access_token 失败，HTTP ${tokenResp.status}，机器人：${robot.name}`);
             return undefined;
         }
         const tokenData = await tokenResp.json();
         if (tokenData.code !== 0 || !tokenData.tenant_access_token) {
+            console.warn(`[Token] 飞书返回错误 code=${tokenData.code} msg=${tokenData.msg}，机器人：${robot.name}，请检查 AppID/AppSecret 是否正确`);
             return undefined;
         }
         return tokenData.tenant_access_token;
     }
-    catch {
+    catch (err) {
+        console.warn(`[Token] 请求异常，机器人：${robot.name}`, err);
         return undefined;
     }
 }
@@ -1353,7 +1356,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.36' });
+    res.json({ success: true, version: '0.3.37' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();

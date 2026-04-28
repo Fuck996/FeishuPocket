@@ -27,7 +27,7 @@ export function buildCardSchema(payload) {
             columns: [
                 {
                     tag: 'column',
-                    width: 'auto',
+                    width: '40px',
                     vertical_align: 'center',
                     elements: [{
                             tag: 'img',
@@ -35,7 +35,8 @@ export function buildCardSchema(payload) {
                             alt: { tag: 'plain_text', content: '头像' },
                             mode: 'crop_center',
                             corner_radius: '50%',
-                            preview: false
+                            preview: false,
+                            fixed_width: 36
                         }]
                 },
                 {
