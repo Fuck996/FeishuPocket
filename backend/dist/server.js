@@ -167,8 +167,8 @@ async function queryFeishuUserName(robot, identity) {
         return undefined;
     }
     // 官方姓名专用接口：通过 ID 获取用户姓名
-    // 文档说明：该接口不校验通讯录授权范围，适合“能查到用户但详情接口 name 为空”的场景
-    const basicName = await queryFeishuUserNameByBasicBatch(tenantAccessToken, identity.openId);
+    // 按文档支持的 ID 类型顺序尝试：open_id -> user_id -> union_id
+    const basicName = await queryFeishuUserNameByBasicBatch(tenantAccessToken, identity);
     if (basicName) {
         setCachedFeishuUserName(identity, basicName);
         return basicName;
@@ -209,34 +209,53 @@ async function queryFeishuUserName(robot, identity) {
         return undefined;
     }
 }
-async function queryFeishuUserNameByBasicBatch(tenantAccessToken, openId) {
+async function queryFeishuUserNameByBasicBatch(tenantAccessToken, identity) {
+    const candidates = [
+        { idType: 'open_id', id: identity.openId },
+        { idType: 'user_id', id: identity.userId },
+        { idType: 'union_id', id: identity.unionId }
+    ];
     try {
-        const resp = await fetch('https://open.feishu.cn/open-apis/contact/v3/users/basic_batch?user_id_type=open_id', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${tenantAccessToken}`,
-                'Content-Type': 'application/json; charset=utf-8'
-            },
-            body: JSON.stringify({ user_ids: [openId] })
-        });
-        if (!resp.ok) {
-            console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} open_id=${openId}`);
-            return undefined;
+        for (const candidate of candidates) {
+            if (!candidate.id) {
+                continue;
+            }
+            const resp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/basic_batch?user_id_type=${candidate.idType}`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${tenantAccessToken}`,
+                    'Content-Type': 'application/json; charset=utf-8'
+                },
+                body: JSON.stringify({ user_ids: [candidate.id] })
+            });
+            const rawText = await resp.text();
+            if (!resp.ok) {
+                console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} idType=${candidate.idType} id=${candidate.id} raw=${rawText.slice(0, 500)}`);
+                continue;
+            }
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            }
+            catch {
+                console.warn(`[用户名查询/basic_batch] 响应非JSON idType=${candidate.idType} id=${candidate.id} raw=${rawText.slice(0, 200)}`);
+                continue;
+            }
+            if (data?.code !== 0) {
+                console.warn(`[用户名查询/basic_batch] 飞书返回 code=${data?.code} msg=${data?.msg} idType=${candidate.idType} id=${candidate.id}`);
+                continue;
+            }
+            const firstUser = data?.data?.users?.[0];
+            const name = firstUser?.name?.trim()
+                || firstUser?.i18n_name?.zh_cn?.trim()
+                || firstUser?.i18n_name?.en_us?.trim();
+            if (!name) {
+                console.warn(`[用户名查询/basic_batch] 接口成功但未返回姓名 idType=${candidate.idType} id=${candidate.id}`);
+                continue;
+            }
+            return name;
         }
-        const data = await resp.json();
-        if (data.code !== 0) {
-            console.warn(`[用户名查询/basic_batch] 飞书返回 code=${data.code} msg=${data.msg} open_id=${openId}`);
-            return undefined;
-        }
-        const firstUser = data.data?.users?.[0];
-        const name = firstUser?.name?.trim()
-            || firstUser?.i18n_name?.zh_cn?.trim()
-            || firstUser?.i18n_name?.en_us?.trim();
-        if (!name) {
-            console.warn(`[用户名查询/basic_batch] 接口成功但未返回姓名 open_id=${openId}`);
-            return undefined;
-        }
-        return name;
+        return undefined;
     }
     catch (err) {
         console.warn('[用户名查询/basic_batch] 请求异常', err);
@@ -1413,7 +1432,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.42' });
+    res.json({ success: true, version: '0.3.43' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();

@@ -191,8 +191,8 @@ async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdent
   }
 
   // 官方姓名专用接口：通过 ID 获取用户姓名
-  // 文档说明：该接口不校验通讯录授权范围，适合“能查到用户但详情接口 name 为空”的场景
-  const basicName = await queryFeishuUserNameByBasicBatch(tenantAccessToken, identity.openId);
+  // 按文档支持的 ID 类型顺序尝试：open_id -> user_id -> union_id
+  const basicName = await queryFeishuUserNameByBasicBatch(tenantAccessToken, identity);
   if (basicName) {
     setCachedFeishuUserName(identity, basicName);
     return basicName;
@@ -240,49 +240,70 @@ async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdent
   }
 }
 
-async function queryFeishuUserNameByBasicBatch(tenantAccessToken: string, openId: string): Promise<string | undefined> {
+async function queryFeishuUserNameByBasicBatch(tenantAccessToken: string, identity: FeishuUserIdentity): Promise<string | undefined> {
+  const candidates: Array<{ idType: 'open_id' | 'user_id' | 'union_id'; id?: string }> = [
+    { idType: 'open_id', id: identity.openId },
+    { idType: 'user_id', id: identity.userId },
+    { idType: 'union_id', id: identity.unionId }
+  ];
+
   try {
-    const resp = await fetch('https://open.feishu.cn/open-apis/contact/v3/users/basic_batch?user_id_type=open_id', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${tenantAccessToken}`,
-        'Content-Type': 'application/json; charset=utf-8'
-      },
-      body: JSON.stringify({ user_ids: [openId] })
-    });
+    for (const candidate of candidates) {
+      if (!candidate.id) {
+        continue;
+      }
 
-    if (!resp.ok) {
-      console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} open_id=${openId}`);
-      return undefined;
+      const resp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/basic_batch?user_id_type=${candidate.idType}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tenantAccessToken}`,
+          'Content-Type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify({ user_ids: [candidate.id] })
+      });
+
+      const rawText = await resp.text();
+      if (!resp.ok) {
+        console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} idType=${candidate.idType} id=${candidate.id} raw=${rawText.slice(0, 500)}`);
+        continue;
+      }
+
+      let data: {
+        code?: number;
+        msg?: string;
+        data?: {
+          users?: Array<{
+            user_id?: string;
+            name?: string;
+            i18n_name?: Record<string, string>;
+          }>;
+        };
+      } | undefined;
+      try {
+        data = JSON.parse(rawText) as typeof data;
+      } catch {
+        console.warn(`[用户名查询/basic_batch] 响应非JSON idType=${candidate.idType} id=${candidate.id} raw=${rawText.slice(0, 200)}`);
+        continue;
+      }
+
+      if (data?.code !== 0) {
+        console.warn(`[用户名查询/basic_batch] 飞书返回 code=${data?.code} msg=${data?.msg} idType=${candidate.idType} id=${candidate.id}`);
+        continue;
+      }
+
+      const firstUser = data?.data?.users?.[0];
+      const name = firstUser?.name?.trim()
+        || firstUser?.i18n_name?.zh_cn?.trim()
+        || firstUser?.i18n_name?.en_us?.trim();
+      if (!name) {
+        console.warn(`[用户名查询/basic_batch] 接口成功但未返回姓名 idType=${candidate.idType} id=${candidate.id}`);
+        continue;
+      }
+
+      return name;
     }
 
-    const data = await resp.json() as {
-      code?: number;
-      msg?: string;
-      data?: {
-        users?: Array<{
-          user_id?: string;
-          name?: string;
-          i18n_name?: Record<string, string>;
-        }>;
-      };
-    };
-
-    if (data.code !== 0) {
-      console.warn(`[用户名查询/basic_batch] 飞书返回 code=${data.code} msg=${data.msg} open_id=${openId}`);
-      return undefined;
-    }
-
-    const firstUser = data.data?.users?.[0];
-    const name = firstUser?.name?.trim()
-      || firstUser?.i18n_name?.zh_cn?.trim()
-      || firstUser?.i18n_name?.en_us?.trim();
-    if (!name) {
-      console.warn(`[用户名查询/basic_batch] 接口成功但未返回姓名 open_id=${openId}`);
-      return undefined;
-    }
-
-    return name;
+    return undefined;
   } catch (err) {
     console.warn('[用户名查询/basic_batch] 请求异常', err);
     return undefined;
@@ -1657,7 +1678,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.43' });
+  res.json({ success: true, version: '0.3.44' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
