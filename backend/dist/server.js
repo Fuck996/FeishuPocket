@@ -166,6 +166,13 @@ async function queryFeishuUserName(robot, identity) {
         console.warn(`[用户名查询] 获取 tenant_access_token 失败，请检查机器人「${robot.name}」的 AppID/AppSecret。openId=${identity.openId ?? '?'}`);
         return undefined;
     }
+    // 官方姓名专用接口：通过 ID 获取用户姓名
+    // 文档说明：该接口不校验通讯录授权范围，适合“能查到用户但详情接口 name 为空”的场景
+    const basicName = await queryFeishuUserNameByBasicBatch(tenantAccessToken, identity.openId);
+    if (basicName) {
+        setCachedFeishuUserName(identity, basicName);
+        return basicName;
+    }
     try {
         const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(identity.openId)}?user_id_type=open_id&department_id_type=open_department_id`, {
             headers: {
@@ -199,6 +206,40 @@ async function queryFeishuUserName(robot, identity) {
     }
     catch (err) {
         console.warn('[用户名查询] 请求异常', err);
+        return undefined;
+    }
+}
+async function queryFeishuUserNameByBasicBatch(tenantAccessToken, openId) {
+    try {
+        const resp = await fetch('https://open.feishu.cn/open-apis/contact/v3/users/basic_batch?user_id_type=open_id', {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${tenantAccessToken}`,
+                'Content-Type': 'application/json; charset=utf-8'
+            },
+            body: JSON.stringify({ user_ids: [openId] })
+        });
+        if (!resp.ok) {
+            console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} open_id=${openId}`);
+            return undefined;
+        }
+        const data = await resp.json();
+        if (data.code !== 0) {
+            console.warn(`[用户名查询/basic_batch] 飞书返回 code=${data.code} msg=${data.msg} open_id=${openId}`);
+            return undefined;
+        }
+        const firstUser = data.data?.users?.[0];
+        const name = firstUser?.name?.trim()
+            || firstUser?.i18n_name?.zh_cn?.trim()
+            || firstUser?.i18n_name?.en_us?.trim();
+        if (!name) {
+            console.warn(`[用户名查询/basic_batch] 接口成功但未返回姓名 open_id=${openId}`);
+            return undefined;
+        }
+        return name;
+    }
+    catch (err) {
+        console.warn('[用户名查询/basic_batch] 请求异常', err);
         return undefined;
     }
 }
@@ -1372,7 +1413,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.41' });
+    res.json({ success: true, version: '0.3.42' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
