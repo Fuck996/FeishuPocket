@@ -1875,6 +1875,16 @@ function App() {
                 </div>
                 <button type="button" onClick={handleChildRewardRule}>保存奖励规则</button>
                 <span className="field-hint">输入项目名称和金额后点击保存，同名项目会自动覆盖；点击下方标签可加载到输入框进行编辑</span>
+                {selectedChild.rewardRules.length > 5 && (
+                  <div className="field-hint" style={{ color: 'var(--color-warning, #e6a817)' }}>
+                    ⚠️ 当前已有 {selectedChild.rewardRules.length} 条奖励规则，飞书群菜单「快捷发奖」最多显示前 5 条，超出部分不会出现在菜单中。
+                  </div>
+                )}
+                {selectedChild.rewardRules.length === 5 && (
+                  <div className="field-hint">
+                    ℹ️ 已达到飞书群菜单「快捷发奖」的最大显示数量（5 条），新增规则将不会显示在菜单中。
+                  </div>
+                )}
                 {selectedChild.rewardRules.length > 0 && (
                   <div className="chip-wrap">
                     {selectedChild.rewardRules.map((rule) => (

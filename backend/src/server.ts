@@ -1296,6 +1296,26 @@ async function triggerRobotQuickAction(robot: RobotConfig, actionKey: string, ch
     return { title: '零花钱金额变动通知' };
   }
 
+  // 快捷发奖：reward_rule:{ruleId}
+  if (actionKey.startsWith('reward_rule:')) {
+    const ruleId = actionKey.slice('reward_rule:'.length);
+    const rule = targetChild.rewardRules.find((item) => item.id === ruleId);
+    if (!rule) {
+      throw new Error('奖励规则不存在或已被删除');
+    }
+    await applyTransaction({
+      childId: targetChild.id,
+      amount: rule.amount,
+      reason: rule.keyword,
+      type: 'reward',
+      source: 'bot',
+      actorUserId: actor?.openId,
+      actorDisplayName: actor?.displayName ?? '群菜单快捷发奖',
+      chatIdOverride: chatId
+    });
+    return { title: '奖励金额变动通知' };
+  }
+
   throw new Error('不支持的动作');
 }
 
@@ -1404,7 +1424,7 @@ function collectRobotMenuChatIds(robot: RobotConfig): string[] {
   return Array.from(ids);
 }
 
-function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<string, string> | null {
+function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): { staticLinks: Record<string, string>; rewardItems: Array<{ ruleId: string; label: string; url: string }> } | null {
   const baseUrl = resolveMenuBridgeBaseUrl(robot);
   if (!baseUrl) {
     return null;
@@ -1415,7 +1435,7 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<s
     return null;
   }
 
-  // 仅生成群菜单需要的5个动作的链接（排除发放零花钱）
+  // 仅生成群菜单需要的5个静态动作的链接（排除发放零花钱）
   const actionKeys: MenuBridgeActionKey[] = [
     'show_control_center',
     'show_help_card',
@@ -1424,15 +1444,30 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<s
     'show_weekly_stats'
   ];
 
-  const linkMap: Record<string, string> = {};
+  const staticLinks: Record<string, string> = {};
   for (const actionKey of actionKeys) {
     const relativePath = buildMenuBridgePath(robot.id, chatId, actionKey, token);
-    linkMap[actionKey] = buildMenuBridgeUrl(baseUrl, relativePath);
+    staticLinks[actionKey] = buildMenuBridgeUrl(baseUrl, relativePath);
   }
-  return linkMap;
+
+  // 从机器人绑定的第一个孩子取奖励规则（最多5条，对应飞书菜单二级上限）
+  const defaultChild = getDefaultChildForRobot(robot);
+  const FEISHU_MENU_REWARD_LIMIT = 5;
+  const rewardItems: Array<{ ruleId: string; label: string; url: string }> = (
+    defaultChild?.rewardRules.slice(0, FEISHU_MENU_REWARD_LIMIT) ?? []
+  ).map((rule) => ({
+    ruleId: rule.id,
+    label: `${rule.keyword}（${rule.amount}元）`,
+    url: buildMenuBridgeUrl(baseUrl, buildMenuBridgePath(robot.id, chatId, `reward_rule:${rule.id}`, token))
+  }));
+
+  return { staticLinks, rewardItems };
 }
 
-function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<string, unknown> {
+function buildFeishuGroupMenuTree(
+  staticLinks: Record<string, string>,
+  rewardItems: Array<{ ruleId: string; label: string; url: string }>
+): Record<string, unknown> {
   // 飞书群菜单：2级结构，请求体字段名为 chat_menu_top_levels（非 chat_menu_items）
   // 结构与响应体一致：顶层用 NONE 类型，子项用 REDIRECT_LINK + redirect_link 对象
   const makeChild = (name: string, url: string) => ({
@@ -1443,27 +1478,36 @@ function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<strin
     }
   });
 
-  return {
-    menu_tree: {
-      chat_menu_top_levels: [
-        {
-          chat_menu_item: { action_type: 'NONE', name: '控制中心' },
-          children: [
-            makeChild('控制台', linkMap['show_control_center']),
-            makeChild('快捷指令查询', linkMap['show_help_card']),
-            makeChild('查询余额', linkMap['query_balance'])
-          ]
-        },
-        {
-          chat_menu_item: { action_type: 'NONE', name: '数据统计' },
-          children: [
-            makeChild('月统计', linkMap['show_monthly_stats']),
-            makeChild('周统计', linkMap['show_weekly_stats'])
-          ]
-        }
+  // 一级菜单上限3个：控制中心 + 快捷发奖（有规则时）+ 数据统计
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const topLevels: any[] = [
+    {
+      chat_menu_item: { action_type: 'NONE', name: '控制中心' },
+      children: [
+        makeChild('控制台', staticLinks['show_control_center']),
+        makeChild('快捷指令查询', staticLinks['show_help_card']),
+        makeChild('查询余额', staticLinks['query_balance'])
       ]
     }
-  };
+  ];
+
+  // 有奖励规则时插入「快捷发奖」（最多5条子菜单，已在链接生成阶段限制）
+  if (rewardItems.length > 0) {
+    topLevels.push({
+      chat_menu_item: { action_type: 'NONE', name: '快捷发奖' },
+      children: rewardItems.map((item) => makeChild(item.label, item.url))
+    });
+  }
+
+  topLevels.push({
+    chat_menu_item: { action_type: 'NONE', name: '数据统计' },
+    children: [
+      makeChild('月统计', staticLinks['show_monthly_stats']),
+      makeChild('周统计', staticLinks['show_weekly_stats'])
+    ]
+  });
+
+  return { menu_tree: { chat_menu_top_levels: topLevels } };
 }
 
 async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Promise<void> {
@@ -1474,8 +1518,8 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     return;
   }
 
-  const linkMap = buildRobotMenuBridgeLinks(robot, chatId);
-  if (!linkMap) {
+  const menuData = buildRobotMenuBridgeLinks(robot, chatId);
+  if (!menuData) {
     console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：未配置 menuBridgeBaseUrl/MENU_BRIDGE_BASE_URL 且无法从 webhook URL 推导域名，或链接生成失败`);
     return;
   }
@@ -1505,7 +1549,7 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
   const response = await fetch(menuUrl, {
     method: 'POST',
     headers: authHeaders,
-    body: JSON.stringify(buildFeishuGroupMenuTree(linkMap))
+    body: JSON.stringify(buildFeishuGroupMenuTree(menuData.staticLinks, menuData.rewardItems))
   });
 
   const rawText = await response.text();
@@ -1521,7 +1565,9 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     throw new Error(`群菜单同步失败：${detail}`);
   }
 
-  console.log(`[群菜单同步] 已同步机器人 ${robot.name} chatId=${chatId}，2级菜单结构（控制中心/数据统计）`);
+  const rewardCount = menuData.rewardItems.length;
+  const menuDesc = rewardCount > 0 ? `控制中心/快捷发奖(${rewardCount}项)/数据统计` : '控制中心/数据统计';
+  console.log(`[群菜单同步] 已同步机器人 ${robot.name} chatId=${chatId}，菜单：${menuDesc}`);
 }
 
 async function syncRobotMenusByRobotId(robotId: string): Promise<void> {
@@ -1536,6 +1582,16 @@ async function syncRobotMenusByRobotId(robotId: string): Promise<void> {
     } catch (error) {
       console.warn(`[群菜单同步] 机器人 ${robot.name} chatId=${chatId} 失败`, error);
     }
+  }
+}
+
+// 奖励规则变更后，找到管理该小孩的所有机器人并重新同步菜单
+async function syncMenusForChildAsync(childId: string): Promise<void> {
+  const robots = store.getSnapshot().robots.filter(
+    (item) => item.enabled && item.childIds.includes(childId)
+  );
+  for (const robot of robots) {
+    await syncRobotMenusByRobotId(robot.id);
   }
 }
 
@@ -2917,6 +2973,9 @@ app.put('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req
   });
 
   res.json({ success: true, message: '设置成功' });
+
+  // 奖励规则变更后异步重新同步管理该小孩的机器人群菜单
+  void syncMenusForChildAsync(childId);
 });
 
 app.delete('/api/config/reward-rule', requireAuth, requireRole('admin'), async (req, res) => {
@@ -2940,6 +2999,9 @@ app.delete('/api/config/reward-rule', requireAuth, requireRole('admin'), async (
   });
 
   res.json({ success: true, message: '奖励规则已删除' });
+
+  // 奖励规则删除后异步重新同步管理该小孩的机器人群菜单
+  void syncMenusForChildAsync(childId);
 });
 
 app.put('/api/config/weekly-notify', requireAuth, requireRole('admin'), async (req, res) => {
@@ -3620,7 +3682,10 @@ app.post('/api/menu-bridge/trigger', async (req, res) => {
     return;
   }
 
-  if (!MENU_BRIDGE_ALLOWED_ACTIONS.includes(actionKey as MenuBridgeActionKey)) {
+  const isStaticAction = MENU_BRIDGE_ALLOWED_ACTIONS.includes(actionKey as MenuBridgeActionKey);
+  // reward_rule:{nanoid} 格式为动态奖励动作
+  const isRewardAction = /^reward_rule:[A-Za-z0-9_-]{1,64}$/.test(actionKey);
+  if (!isStaticAction && !isRewardAction) {
     res.status(400).json({ success: false, error: '不支持的动作' });
     return;
   }
