@@ -207,6 +207,23 @@ async function queryFeishuUserName(robot, identity) {
     }
     return undefined;
 }
+async function queryFeishuUserNameWithFallback(robots, identity) {
+    // 先按入参顺序尝试，避免单个机器人通讯录范围差异导致的名称查询失败。
+    const candidates = robots.filter((robot, index, array) => robot.feishuMode !== 'webhook'
+        && Boolean(robot.feishuAppId)
+        && Boolean(robot.feishuAppSecret)
+        && array.findIndex((item) => item.id === robot.id) === index);
+    for (const robot of candidates) {
+        const name = await queryFeishuUserName(robot, identity);
+        if (name) {
+            return name;
+        }
+    }
+    if (identity.openId || identity.userId || identity.unionId) {
+        console.warn(`[用户名查询] 多机器人兜底后仍失败。openId=${identity.openId ?? '?'} userId=${identity.userId ?? '?'} unionId=${identity.unionId ?? '?'}`);
+    }
+    return undefined;
+}
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -1356,7 +1373,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.37' });
+    res.json({ success: true, version: '0.3.39' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -2176,7 +2193,7 @@ async function processBotMessage(channel, senderOpenId, senderUserId, senderUnio
     const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
     if (!robot)
         return null;
-    const senderDisplayName = await queryFeishuUserName(robot, {
+    const senderDisplayName = await queryFeishuUserNameWithFallback([robot, ...matchedRobots], {
         openId: senderOpenId,
         userId: senderUserId,
         unionId: senderUnionId,
