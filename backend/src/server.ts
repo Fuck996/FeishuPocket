@@ -171,8 +171,14 @@ async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdent
     return cached;
   }
 
+  if (!robot.feishuAppId || !robot.feishuAppSecret) {
+    console.warn(`[用户名查询] 机器人「${robot.name}」未配置 AppID/AppSecret，无法查询用户名。openId=${identity.openId ?? '?'}`);
+    return undefined;
+  }
+
   const tenantAccessToken = await getFeishuTenantAccessToken(robot);
   if (!tenantAccessToken) {
+    console.warn(`[用户名查询] 获取 tenant_access_token 失败，请检查机器人「${robot.name}」的 AppID/AppSecret。openId=${identity.openId ?? '?'}`);
     return undefined;
   }
 
@@ -677,9 +683,57 @@ async function uploadFeishuImageByUrl(tenantAccessToken: string, imageUrl: strin
   }
 }
 
+// 上传 base64 data URL 格式的图片到飞书，返回 img_key
+async function uploadFeishuImageByDataUrl(tenantAccessToken: string, dataUrl: string): Promise<string | undefined> {
+  try {
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      return undefined;
+    }
+    const [, mimeType, base64Data] = match;
+    if (!mimeType.startsWith('image/')) {
+      return undefined;
+    }
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (!buffer.byteLength || buffer.byteLength > 10 * 1024 * 1024) {
+      return undefined;
+    }
+
+    const form = new FormData();
+    form.append('image_type', 'message');
+    form.append('image', new Blob([buffer], { type: mimeType }), 'child-avatar');
+
+    const uploadResp = await fetch('https://open.feishu.cn/open-apis/im/v1/images', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tenantAccessToken}` },
+      body: form
+    });
+    if (!uploadResp.ok) {
+      return undefined;
+    }
+
+    const uploadData = await uploadResp.json() as { code?: number; data?: { image_key?: string } };
+    if (uploadData.code !== 0) {
+      return undefined;
+    }
+
+    return uploadData.data?.image_key;
+  } catch {
+    return undefined;
+  }
+}
+
 async function ensureChildFeishuAvatarKey(child: ChildProfile): Promise<string | undefined> {
-  const avatarUrl = resolveAvatarForFeishu(child);
-  if (child.feishuAvatarKey && child.feishuAvatarSource === avatarUrl) {
+  // 判断头像类型：data URL（前端上传的 base64）还是 HTTP URL
+  const isDataUrl = child.avatar.startsWith('data:');
+
+  // data URL 用内容的 SHA-256 短哈希作为变更源（避免存储大 base64）
+  // HTTP URL 直接用 URL 本身
+  const avatarSource = isDataUrl
+    ? 'sha256:' + crypto.createHash('sha256').update(child.avatar).digest('hex').slice(0, 24)
+    : resolveAvatarForFeishu(child);
+
+  if (child.feishuAvatarKey && child.feishuAvatarSource === avatarSource) {
     return child.feishuAvatarKey;
   }
 
@@ -697,16 +751,23 @@ async function ensureChildFeishuAvatarKey(child: ChildProfile): Promise<string |
     && r.feishuAppSecret
   );
   if (!robot) {
+    console.warn(`[头像上传] 未找到配置了 AppID/AppSecret 的应用机器人，无法上传头像。孩子：${child.name}`);
     return undefined;
   }
 
   const tenantAccessToken = await getFeishuTenantAccessToken(robot);
   if (!tenantAccessToken) {
+    console.warn(`[头像上传] 获取 tenant_access_token 失败，请检查机器人的 AppID/AppSecret 是否正确。孩子：${child.name}`);
     return undefined;
   }
 
-  const imageKey = await uploadFeishuImageByUrl(tenantAccessToken, avatarUrl);
+  // 根据头像类型选择上传方式：data URL 直接解码上传，HTTP URL 先 fetch 再上传
+  const imageKey = isDataUrl
+    ? await uploadFeishuImageByDataUrl(tenantAccessToken, child.avatar)
+    : await uploadFeishuImageByUrl(tenantAccessToken, resolveAvatarForFeishu(child));
+
   if (!imageKey) {
+    console.warn(`[头像上传] 图片上传失败。孩子：${child.name}，类型：${isDataUrl ? 'data-url' : 'http-url'}`);
     return undefined;
   }
 
@@ -716,10 +777,11 @@ async function ensureChildFeishuAvatarKey(child: ChildProfile): Promise<string |
       return;
     }
     target.feishuAvatarKey = imageKey;
-    target.feishuAvatarSource = avatarUrl;
+    target.feishuAvatarSource = avatarSource;
     target.updatedAt = new Date().toISOString();
   });
 
+  console.log(`[头像上传] 成功获取 img_key。孩子：${child.name}，key：${imageKey}`);
   return imageKey;
 }
 
@@ -1495,7 +1557,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.35' });
+  res.json({ success: true, version: '0.3.36' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
