@@ -10,6 +10,7 @@ export interface ChildProfile {
   id: string;
   name: string;
   avatar: string;
+  feishuAvatarKey?: string;
   balance: number;
   dailyAllowance: number;
   dailyGrantHour?: number;

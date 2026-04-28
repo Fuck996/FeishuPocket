@@ -404,6 +404,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('stats');
   const [defaultDailyAllowance, setDefaultDailyAllowance] = useState(10);
   const [notices, setNotices] = useState<NoticeItem[]>([]);
+  const [txPage, setTxPage] = useState(1);
+  const TX_PAGE_SIZE = 50;
 
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('admin');
@@ -1002,7 +1004,7 @@ function App() {
               <span>余额</span>
             </div>
             <div className="ledger-table__body">
-              {ledgerRows.map((row) => (
+              {ledgerRows.slice((txPage - 1) * TX_PAGE_SIZE, txPage * TX_PAGE_SIZE).map((row) => (
                 <article className="ledger-row" key={row.id}>
                   <div className="ledger-row__cell">
                     <div className="ledger-row__primary">{formatDateTime(row.createdAt)}</div>
@@ -1025,6 +1027,24 @@ function App() {
               {ledgerRows.length === 0 && <div className="empty-card">暂无金额流水，等第一笔变动出现后会在这里汇总。</div>}
             </div>
           </div>
+
+          {ledgerRows.length > TX_PAGE_SIZE && (
+            <div className="pagination-bar">
+              <button
+                type="button"
+                className="pagination-bar__btn"
+                disabled={txPage === 1}
+                onClick={() => setTxPage((p) => Math.max(1, p - 1))}
+              >上一页</button>
+              <span className="pagination-bar__info">第 {txPage} / {Math.ceil(ledgerRows.length / TX_PAGE_SIZE)} 页</span>
+              <button
+                type="button"
+                className="pagination-bar__btn"
+                disabled={txPage >= Math.ceil(ledgerRows.length / TX_PAGE_SIZE)}
+                onClick={() => setTxPage((p) => Math.min(Math.ceil(ledgerRows.length / TX_PAGE_SIZE), p + 1))}
+              >下一页</button>
+            </div>
+          )}
         </section>
       </div>
     );
@@ -1764,6 +1784,13 @@ function App() {
               <div className="profile-head__info">
                 <strong>{childDraft.name || '未命名孩子'}</strong>
                 <span>{childView.mode === 'edit' ? (boundRobotNames.length > 0 ? `绑定机器人：${boundRobotNames.join('、')}` : '绑定机器人：未绑定') : '保存后即可出现在孩子列表中'}</span>
+                {childView.mode === 'edit' && (
+                  <span className={`field-hint ${selectedChild?.feishuAvatarKey ? 'text-success' : 'text-warning'}`}>
+                    飞书头像 img_key：{selectedChild?.feishuAvatarKey
+                      ? <span title={selectedChild.feishuAvatarKey} style={{ fontFamily: 'monospace', fontSize: '0.72em', wordBreak: 'break-all' }}>{selectedChild.feishuAvatarKey}</span>
+                      : '未获取（请确认机器人已配置 AppID/AppSecret）'}
+                  </span>
+                )}
               </div>
             </div>
 

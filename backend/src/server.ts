@@ -194,13 +194,16 @@ async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdent
         }
       });
       if (!userResp.ok) {
+        console.warn(`[用户名查询] HTTP ${userResp.status}，idType=${candidate.idType} id=${candidate.id}`);
         continue;
       }
       const userData = await userResp.json() as {
         code?: number;
+        msg?: string;
         data?: { user?: { name?: string; en_name?: string; nickname?: string; open_id?: string; user_id?: string; union_id?: string } };
       };
       if (userData.code !== 0) {
+        console.warn(`[用户名查询] 飞书返回 code=${userData.code} msg=${userData.msg}，idType=${candidate.idType} id=${candidate.id}。常见原因：应用通讯录权限范围未包含该用户，请在开发者后台"权限管理 > 通讯录权限范围"中添加。`);
         continue;
       }
 
@@ -1492,7 +1495,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.34' });
+  res.json({ success: true, version: '0.3.35' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {

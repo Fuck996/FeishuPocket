@@ -603,6 +603,45 @@ button:disabled {
   align-items: center;
 }
 
+/* 分页条 */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 0 4px;
+}
+
+.pagination-bar__btn {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--bg-panel-strong);
+  border: 1px solid rgba(92, 72, 41, 0.14);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.pagination-bar__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pagination-bar__info {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+/* 成功/警告提示色 */
+.text-success {
+  color: var(--teal, #0d9488);
+}
+
+.text-warning {
+  color: var(--warning, #d97706);
+}
+
 .child-card__avatar,
 .profile-head__avatar {
   width: 76px;
