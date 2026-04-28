@@ -179,85 +179,57 @@ async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdent
     return undefined;
   }
 
+  if (!identity.openId) {
+    console.warn(`[用户名查询] 缺少 open_id，无法按文档流程调用 contact/v3/users。机器人：${robot.name}`);
+    return undefined;
+  }
+
   const tenantAccessToken = await getFeishuTenantAccessToken(robot);
   if (!tenantAccessToken) {
     console.warn(`[用户名查询] 获取 tenant_access_token 失败，请检查机器人「${robot.name}」的 AppID/AppSecret。openId=${identity.openId ?? '?'}`);
     return undefined;
   }
 
-  const candidates: Array<{ idType: 'open_id' | 'user_id' | 'union_id'; id?: string }> = [
-    { idType: 'open_id', id: identity.openId },
-    { idType: 'user_id', id: identity.userId },
-    { idType: 'union_id', id: identity.unionId }
-  ];
-
   try {
-    for (const candidate of candidates) {
-      if (!candidate.id) {
-        continue;
+    const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(identity.openId)}?user_id_type=open_id&department_id_type=open_department_id`, {
+      headers: {
+        Authorization: `Bearer ${tenantAccessToken}`,
+        'Content-Type': 'application/json; charset=utf-8'
       }
-      const userResp = await fetch(`https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(candidate.id)}?user_id_type=${candidate.idType}&department_id_type=open_department_id`, {
-        headers: {
-          Authorization: `Bearer ${tenantAccessToken}`,
-          'Content-Type': 'application/json; charset=utf-8'
-        }
-      });
-      if (!userResp.ok) {
-        console.warn(`[用户名查询] HTTP ${userResp.status}，idType=${candidate.idType} id=${candidate.id}`);
-        continue;
-      }
-      const userData = await userResp.json() as {
-        code?: number;
-        msg?: string;
-        data?: { user?: { name?: string; en_name?: string; nickname?: string; open_id?: string; user_id?: string; union_id?: string } };
-      };
-      if (userData.code !== 0) {
-        console.warn(`[用户名查询] 飞书返回 code=${userData.code} msg=${userData.msg}，idType=${candidate.idType} id=${candidate.id}。常见原因：应用通讯录权限范围未包含该用户，请在开发者后台"权限管理 > 通讯录权限范围"中添加。`);
-        continue;
-      }
-
-      const name = userData.data?.user?.name?.trim()
-        || userData.data?.user?.nickname?.trim()
-        || userData.data?.user?.en_name?.trim();
-      if (!name) {
-        continue;
-      }
-
-      setCachedFeishuUserName({
-        openId: identity.openId ?? userData.data?.user?.open_id,
-        userId: identity.userId ?? userData.data?.user?.user_id,
-        unionId: identity.unionId ?? userData.data?.user?.union_id,
-        displayNameHint: name
-      }, name);
-      return name;
+    });
+    if (!userResp.ok) {
+      console.warn(`[用户名查询] HTTP ${userResp.status}，user_id_type=open_id id=${identity.openId}`);
+      return undefined;
     }
-  } catch {
+    const userData = await userResp.json() as {
+      code?: number;
+      msg?: string;
+      data?: { user?: { name?: string; en_name?: string; nickname?: string; open_id?: string; user_id?: string; union_id?: string } };
+    };
+    if (userData.code !== 0) {
+      console.warn(`[用户名查询] 飞书返回 code=${userData.code} msg=${userData.msg}，user_id_type=open_id id=${identity.openId}。常见原因：应用通讯录权限范围未包含该用户。`);
+      return undefined;
+    }
+
+    const name = userData.data?.user?.name?.trim()
+      || userData.data?.user?.nickname?.trim()
+      || userData.data?.user?.en_name?.trim();
+    if (!name) {
+      console.warn(`[用户名查询] 接口成功但未返回可用名称，open_id=${identity.openId}`);
+      return undefined;
+    }
+
+    setCachedFeishuUserName({
+      openId: identity.openId ?? userData.data?.user?.open_id,
+      userId: identity.userId ?? userData.data?.user?.user_id,
+      unionId: identity.unionId ?? userData.data?.user?.union_id,
+      displayNameHint: name
+    }, name);
+    return name;
+  } catch (err) {
+    console.warn('[用户名查询] 请求异常', err);
     return undefined;
   }
-
-  return undefined;
-}
-
-async function queryFeishuUserNameWithFallback(robots: RobotConfig[], identity: FeishuUserIdentity): Promise<string | undefined> {
-  // 先按入参顺序尝试，避免单个机器人通讯录范围差异导致的名称查询失败。
-  const candidates = robots.filter((robot, index, array) =>
-    robot.feishuMode !== 'webhook'
-    && Boolean(robot.feishuAppId)
-    && Boolean(robot.feishuAppSecret)
-    && array.findIndex((item) => item.id === robot.id) === index
-  );
-
-  for (const robot of candidates) {
-    const name = await queryFeishuUserName(robot, identity);
-    if (name) {
-      return name;
-    }
-  }
-
-  if (identity.openId || identity.userId || identity.unionId) {
-    console.warn(`[用户名查询] 多机器人兜底后仍失败。openId=${identity.openId ?? '?'} userId=${identity.userId ?? '?'} unionId=${identity.unionId ?? '?'}`);
-  }
-  return undefined;
 }
 
 type AuthedRequest = Request & {
@@ -1604,7 +1576,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.39' });
+  res.json({ success: true, version: '0.3.40' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2584,7 +2556,7 @@ async function processBotMessage(
   const robot = pickRobotForAction(matchedRobots, chatId, action.childName);
   if (!robot) return null;
 
-  const senderDisplayName = await queryFeishuUserNameWithFallback([robot, ...matchedRobots], {
+  const senderDisplayName = await queryFeishuUserName(primaryRobot, {
     openId: senderOpenId,
     userId: senderUserId,
     unionId: senderUnionId,
