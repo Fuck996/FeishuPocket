@@ -563,15 +563,18 @@ async function uploadFeishuImageByUrl(tenantAccessToken, imageUrl) {
             body: form
         });
         if (!uploadResp.ok) {
+            console.warn(`[头像上传/URL] HTTP 错误 ${uploadResp.status}`);
             return undefined;
         }
         const uploadData = await uploadResp.json();
         if (uploadData.code !== 0) {
+            console.warn(`[头像上传/URL] 飞书返回错误 code=${uploadData.code} msg=${uploadData.msg}。请检查：①"获取与上传图片或文件资源"(im:resource)权限是否已开启；②机器人能力是否已启用`);
             return undefined;
         }
         return uploadData.data?.image_key;
     }
-    catch {
+    catch (err) {
+        console.warn('[头像上传/URL] 请求异常', err);
         return undefined;
     }
 }
@@ -599,15 +602,19 @@ async function uploadFeishuImageByDataUrl(tenantAccessToken, dataUrl) {
             body: form
         });
         if (!uploadResp.ok) {
+            console.warn(`[头像上传/DataURL] HTTP 错误 ${uploadResp.status}`);
             return undefined;
         }
         const uploadData = await uploadResp.json();
         if (uploadData.code !== 0) {
+            console.warn(`[头像上传/DataURL] 飞书返回错误 code=${uploadData.code} msg=${uploadData.msg}。请检查：①"获取与上传图片或文件资源"(im:resource)权限是否已开启；②机器人能力是否已启用`);
             return undefined;
         }
+        console.log(`[头像上传/DataURL] 上传成功，image_key=${uploadData.data?.image_key}`);
         return uploadData.data?.image_key;
     }
-    catch {
+    catch (err) {
+        console.warn('[头像上传/DataURL] 请求异常', err);
         return undefined;
     }
 }
@@ -663,12 +670,28 @@ async function ensureChildFeishuAvatarKey(child) {
 async function backfillMissingChildAvatarKeysOnStartup() {
     const children = store.getSnapshot().children;
     for (const child of children) {
-        if (child.feishuAvatarKey) {
-            continue;
+        // 不仅检查 key 是否存在，还要验证 source 是否与当前头像内容匹配（避免旧错误 key 残留）
+        if (child.feishuAvatarKey && child.feishuAvatarSource) {
+            const isDataUrl = child.avatar.startsWith('data:');
+            const currentSource = isDataUrl
+                ? 'sha256:' + crypto.createHash('sha256').update(child.avatar).digest('hex').slice(0, 24)
+                : resolveAvatarForFeishu(child);
+            if (child.feishuAvatarSource === currentSource) {
+                continue;
+            }
+            console.log(`[头像同步] 头像内容已变更，清除旧 key 重新上传: ${child.name}`);
+            store.update((draft) => {
+                const target = draft.children.find((item) => item.id === child.id);
+                if (!target)
+                    return;
+                target.feishuAvatarKey = undefined;
+                target.feishuAvatarSource = undefined;
+            });
         }
-        const imageKey = await ensureChildFeishuAvatarKey(child);
+        const latestChild = store.getSnapshot().children.find((item) => item.id === child.id) ?? child;
+        const imageKey = await ensureChildFeishuAvatarKey(latestChild);
         if (imageKey) {
-            console.log(`[头像同步] 已补齐孩子头像 img_key: ${child.name}`);
+            console.log(`[头像同步] 已补齐孩子头像 img_key: ${child.name}，key=${imageKey}`);
         }
     }
 }
@@ -904,8 +927,8 @@ async function applyTransaction(input) {
     const currentBalance = updatedChild?.balance ?? child.balance;
     const { date, time } = formatDateTimeCn(transaction.createdAt);
     const avatarUrl = resolveAvatarForFeishu(child);
-    // 优先使用最新快照的 feishuAvatarKey（可能已被启动补齐写入），避免使用开头旧快照的 child 对象
-    const avatarKey = (updatedChild?.feishuAvatarKey) ?? await ensureChildFeishuAvatarKey(child);
+    // 总是通过 ensureChildFeishuAvatarKey 来获取，内部会做 source 校验，防止旧错误 key 被直接复用
+    const avatarKey = await ensureChildFeishuAvatarKey(updatedChild ?? child);
     if (!avatarKey) {
         console.warn(`[卡片头像] 孩子 ${child.name} 的 img_key 为空，头像将不显示。请确认机器人已配置飞书应用 AppID/AppSecret。`);
     }
@@ -1330,7 +1353,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.35' });
+    res.json({ success: true, version: '0.3.36' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
