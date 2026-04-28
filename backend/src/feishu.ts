@@ -11,6 +11,8 @@ export interface FeishuCardPayload {
   color?: string;
   templateId?: string;
   templateVariable?: Record<string, unknown>;
+  /** 孩子头像 img_key，用于非模板卡片中直接渲染头像列布局 */
+  avatarKey?: string;
 }
 
 export interface FeishuSendTarget {
@@ -44,10 +46,45 @@ async function getTenantAccessToken(appId: string, appSecret: string): Promise<s
 
 // 构建飞书卡片 JSON 2.0 schema（支持回传按钮，触发 card.action.trigger 新版回调）
 export function buildCardSchema(payload: FeishuCardPayload): Record<string, unknown> {
-  const elements: unknown[] = payload.lines.map((line) => ({
-    tag: 'markdown',
-    content: line
-  }));
+  const elements: unknown[] = [];
+
+  // 若有头像 img_key，第一行改为"头像 + 文本"双列布局，其余行保持 markdown
+  if (payload.avatarKey && payload.lines.length > 0) {
+    const [firstLine, ...restLines] = payload.lines;
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'none',
+      columns: [
+        {
+          tag: 'column',
+          width: 'auto',
+          vertical_align: 'center',
+          elements: [{
+            tag: 'img',
+            img_key: payload.avatarKey,
+            alt: { tag: 'plain_text', content: '头像' },
+            mode: 'crop_center',
+            corner_radius: '50%',
+            preview: false
+          }]
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          vertical_align: 'center',
+          elements: [{ tag: 'markdown', content: firstLine }]
+        }
+      ]
+    });
+    for (const line of restLines) {
+      elements.push({ tag: 'markdown', content: line });
+    }
+  } else {
+    for (const line of payload.lines) {
+      elements.push({ tag: 'markdown', content: line });
+    }
+  }
 
   // 每个按钮独立放入 body elements，使用 value 回传给 card.action.trigger
   if (payload.actions?.length) {

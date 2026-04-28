@@ -669,12 +669,14 @@ function buildBalanceSnapshotCardPayload(child) {
             `💰 **当前余额**：${child.balance.toFixed(2)}元`,
             `**说明**：暂无历史变动记录`
         ];
+        basePayload.avatarKey = child.feishuAvatarKey ?? undefined;
         return basePayload;
     }
     const actorDisplay = resolveActorDisplay(latest.source, latest.actorUserId, latest.actorDisplayName);
     const { date, time } = formatDateTimeCn(latest.createdAt);
     const avatarUrl = resolveAvatarForFeishu(child);
     const avatarKey = child.feishuAvatarKey;
+    basePayload.avatarKey = avatarKey ?? undefined;
     basePayload.lines = [
         `**对象**：${child.name}`,
         `💰 **最近变动金额**：${amountWithSign(latest.amount)}元   |   **当前余额**：${child.balance.toFixed(2)}元`,
@@ -860,6 +862,8 @@ async function applyTransaction(input) {
             `**变动时间**：${date} ${time}`,
             `**变动操作人**：${actorDisplay}`
         ],
+        // 有头像 key 时直接传入卡片 schema，非模板路径也能渲染头像
+        avatarKey: avatarKey ?? undefined,
         // 携带撤销按钮，用户可在 30 分钟内点击撤销此次操作
         actions: [{
                 text: '↩ 撤销此操作',
@@ -1270,7 +1274,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.33' });
+    res.json({ success: true, version: '0.3.34' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
