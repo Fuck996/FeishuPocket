@@ -1160,7 +1160,7 @@ function collectRobotMenuChatIds(robot) {
     return Array.from(ids);
 }
 function buildRobotMenuBridgeLinks(robot, chatId) {
-    const baseUrl = process.env.MENU_BRIDGE_BASE_URL?.trim();
+    const baseUrl = robot.menuBridgeBaseUrl?.trim() || process.env.MENU_BRIDGE_BASE_URL?.trim();
     if (!baseUrl) {
         return [];
     }
@@ -1205,7 +1205,7 @@ async function syncRobotGroupMenuToChat(robot, chatId) {
     }
     const links = buildRobotMenuBridgeLinks(robot, chatId);
     if (links.length === 0) {
-        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：MENU_BRIDGE_BASE_URL 未配置或链接生成失败`);
+        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：未配置 menuBridgeBaseUrl/MENU_BRIDGE_BASE_URL 或链接生成失败`);
         return;
     }
     const tenantAccessToken = await getFeishuTenantAccessToken(robot);
@@ -1825,7 +1825,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.48' });
+    res.json({ success: true, version: '0.3.49' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -2082,7 +2082,7 @@ app.get('/api/robots', requireAuth, requireRole('admin'), (_req, res) => {
     res.json({ success: true, data: store.getSnapshot().robots });
 });
 app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
-    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
+    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId, menuBridgeBaseUrl } = req.body;
     const normalizedName = String(name ?? '').trim();
     const normalizedChildIds = normalizeStringArray(childIds);
     const normalizedControllerOpenIds = normalizeStringArray(controllerOpenIds);
@@ -2108,6 +2108,7 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
         feishuVerificationToken: feishuVerificationToken ?? undefined,
         feishuSigningSecret: feishuSigningSecret ?? undefined,
         feishuDefaultChatId: feishuDefaultChatId ?? undefined,
+        menuBridgeBaseUrl: typeof menuBridgeBaseUrl === 'string' ? menuBridgeBaseUrl.trim().replace(/\/+$/, '') : undefined,
         menuBridgeTokens: {},
         createdAt: now,
         updatedAt: now
@@ -2123,7 +2124,7 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
 });
 app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
     const { robotId } = req.params;
-    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId } = req.body;
+    const { name, enabled, childIds, controllerOpenIds, feishuMode, feishuAppId, feishuAppSecret, feishuWebhookUrl, feishuVerificationToken, feishuSigningSecret, feishuDefaultChatId, menuBridgeBaseUrl } = req.body;
     const exists = store.getSnapshot().robots.some((item) => item.id === robotId);
     if (!exists) {
         res.status(404).json({ success: false, error: '机器人不存在' });
@@ -2168,6 +2169,8 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
             robot.feishuSigningSecret = feishuSigningSecret;
         if (feishuDefaultChatId !== undefined)
             robot.feishuDefaultChatId = feishuDefaultChatId;
+        if (menuBridgeBaseUrl !== undefined)
+            robot.menuBridgeBaseUrl = String(menuBridgeBaseUrl).trim().replace(/\/+$/, '');
         robot.updatedAt = new Date().toISOString();
         updatedRobot = robot;
     });
@@ -2255,12 +2258,25 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
     }
     const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : '';
     const actionKeys = normalizeMenuBridgeActionKeys(req.body?.actionKeys);
-    const baseUrl = typeof req.body?.baseUrl === 'string' && req.body.baseUrl.trim()
-        ? req.body.baseUrl.trim()
-        : process.env.MENU_BRIDGE_BASE_URL?.trim();
+    const incomingBaseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl.trim().replace(/\/+$/, '') : '';
+    const baseUrl = incomingBaseUrl || robot.menuBridgeBaseUrl?.trim() || process.env.MENU_BRIDGE_BASE_URL?.trim();
     if (!chatId) {
         res.status(400).json({ success: false, error: 'chatId 不能为空' });
         return;
+    }
+    if (!baseUrl) {
+        res.status(400).json({ success: false, error: '缺少中转页基地址，请传 baseUrl 或配置机器人 menuBridgeBaseUrl / 环境变量 MENU_BRIDGE_BASE_URL' });
+        return;
+    }
+    if (incomingBaseUrl) {
+        store.update((draft) => {
+            const targetRobot = draft.robots.find((item) => item.id === robotId);
+            if (!targetRobot) {
+                return;
+            }
+            targetRobot.menuBridgeBaseUrl = incomingBaseUrl;
+            targetRobot.updatedAt = new Date().toISOString();
+        });
     }
     const token = ensureRobotMenuBridgeToken(robotId, chatId);
     if (!token) {

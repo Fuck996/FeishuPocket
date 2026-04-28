@@ -55,6 +55,7 @@ export interface RobotConfig {
   feishuVerificationToken?: string;
   feishuSigningSecret?: string;
   feishuDefaultChatId?: string;
+  menuBridgeBaseUrl?: string;
   lastActiveChatId?: string;
   createdAt: string;
   updatedAt: string;

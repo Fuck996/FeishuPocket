@@ -120,6 +120,7 @@ export class JsonStore {
         feishuSigningSecret: r.feishuSigningSecret,
         feishuDefaultChatId: r.feishuDefaultChatId,
         lastActiveChatId: r.lastActiveChatId,
+        menuBridgeBaseUrl: typeof r.menuBridgeBaseUrl === 'string' ? r.menuBridgeBaseUrl.trim() : undefined,
         menuBridgeTokens: (r.menuBridgeTokens && typeof r.menuBridgeTokens === 'object')
           ? Object.fromEntries(
               Object.entries(r.menuBridgeTokens as Record<string, unknown>)

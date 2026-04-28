@@ -48,6 +48,7 @@ export interface RobotConfig {
   feishuSigningSecret?: string;
   feishuDefaultChatId?: string;
   lastActiveChatId?: string;
+  menuBridgeBaseUrl?: string;
   // 群菜单中转令牌（按群 chatId 维度）
   menuBridgeTokens?: Record<string, string>;
   createdAt: string;

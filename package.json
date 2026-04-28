@@ -1,6 +1,6 @@
 {
   "name": "feishu-pocket",
-  "version": "0.3.48",
+  "version": "0.3.49",
   "private": true,
   "scripts": {
     "dev:backend": "cd backend && npm run dev",
