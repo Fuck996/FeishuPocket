@@ -1126,6 +1126,135 @@ function buildMenuBridgeUrl(baseUrl, pathWithQuery) {
     }
     return `${normalizedBaseUrl}${pathWithQuery}`;
 }
+function ensureRobotMenuBridgeToken(robotId, chatId) {
+    let token = '';
+    store.update((draft) => {
+        const targetRobot = draft.robots.find((item) => item.id === robotId);
+        if (!targetRobot) {
+            return;
+        }
+        if (!targetRobot.menuBridgeTokens) {
+            targetRobot.menuBridgeTokens = {};
+        }
+        const existing = targetRobot.menuBridgeTokens[chatId]?.trim();
+        token = existing || nanoid(32);
+        targetRobot.menuBridgeTokens[chatId] = token;
+        targetRobot.updatedAt = new Date().toISOString();
+    });
+    return token;
+}
+function collectRobotMenuChatIds(robot) {
+    const ids = new Set();
+    if (robot.feishuDefaultChatId?.trim()) {
+        ids.add(robot.feishuDefaultChatId.trim());
+    }
+    if (robot.lastActiveChatId?.trim()) {
+        ids.add(robot.lastActiveChatId.trim());
+    }
+    for (const key of Object.keys(robot.menuBridgeTokens ?? {})) {
+        const normalized = key.trim();
+        if (normalized) {
+            ids.add(normalized);
+        }
+    }
+    return Array.from(ids);
+}
+function buildRobotMenuBridgeLinks(robot, chatId) {
+    const baseUrl = process.env.MENU_BRIDGE_BASE_URL?.trim();
+    if (!baseUrl) {
+        return [];
+    }
+    const token = ensureRobotMenuBridgeToken(robot.id, chatId);
+    if (!token) {
+        return [];
+    }
+    const actionConfig = [
+        { actionKey: 'show_control_center', name: '控制中心' },
+        { actionKey: 'show_help_card', name: '快捷指令' },
+        { actionKey: 'query_balance', name: '余额查询' },
+        { actionKey: 'show_weekly_stats', name: '周统计' },
+        { actionKey: 'show_monthly_stats', name: '月统计' },
+        { actionKey: 'manual_grant_daily_allowance', name: '发放零花钱' }
+    ];
+    return actionConfig.map((item) => {
+        const relativePath = buildMenuBridgePath(robot.id, chatId, item.actionKey, token);
+        return {
+            name: item.name,
+            url: buildMenuBridgeUrl(baseUrl, relativePath)
+        };
+    });
+}
+function buildFeishuGroupMenuTree(links) {
+    // 飞书群菜单仅支持跳转，实际动作通过中转页触发后端接口完成。
+    return {
+        menu_tree: {
+            chat_menu_items: links.map((item) => ({
+                chat_menu_item_name: item.name,
+                action_type: 'REDIRECT_LINK',
+                redirect_link: item.url
+            }))
+        }
+    };
+}
+async function syncRobotGroupMenuToChat(robot, chatId) {
+    if (!robot.enabled || robot.feishuMode === 'webhook') {
+        return;
+    }
+    if (!robot.feishuAppId || !robot.feishuAppSecret) {
+        return;
+    }
+    const links = buildRobotMenuBridgeLinks(robot, chatId);
+    if (links.length === 0) {
+        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：MENU_BRIDGE_BASE_URL 未配置或链接生成失败`);
+        return;
+    }
+    const tenantAccessToken = await getFeishuTenantAccessToken(robot);
+    if (!tenantAccessToken) {
+        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：tenant_access_token 获取失败`);
+        return;
+    }
+    const response = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${tenantAccessToken}`,
+            'Content-Type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify(buildFeishuGroupMenuTree(links))
+    });
+    const rawText = await response.text();
+    let result = {};
+    try {
+        result = rawText ? JSON.parse(rawText) : {};
+    }
+    catch {
+        result = {};
+    }
+    if (!response.ok || result.code !== 0) {
+        const detail = result.msg ?? rawText.slice(0, 200) ?? `HTTP ${response.status}`;
+        throw new Error(`群菜单同步失败：${detail}`);
+    }
+    console.log(`[群菜单同步] 已同步机器人 ${robot.name} chatId=${chatId}，菜单项=${links.length}`);
+}
+async function syncRobotMenusByRobotId(robotId) {
+    const robot = store.getSnapshot().robots.find((item) => item.id === robotId);
+    if (!robot) {
+        return;
+    }
+    for (const chatId of collectRobotMenuChatIds(robot)) {
+        try {
+            await syncRobotGroupMenuToChat(robot, chatId);
+        }
+        catch (error) {
+            console.warn(`[群菜单同步] 机器人 ${robot.name} chatId=${chatId} 失败`, error);
+        }
+    }
+}
+async function syncAllRobotGroupMenusOnStartup() {
+    const robots = store.getSnapshot().robots.filter((item) => item.enabled);
+    for (const robot of robots) {
+        await syncRobotMenusByRobotId(robot.id);
+    }
+}
 function inferSuggestion(increasedAmount, expenseAmount, remainingAmount) {
     if (increasedAmount === 0 && expenseAmount === 0) {
         return '本周无有效记账记录，建议先从每天记录1笔小额消费开始。';
@@ -1685,6 +1814,10 @@ async function initFeishuWsClient() {
 }
 // 服务启动后初始化飞书 WS 连接
 void initFeishuWsClient();
+// 服务启动后自动同步已配置群的群菜单
+void syncAllRobotGroupMenusOnStartup().catch((error) => {
+    console.warn('[群菜单同步] 启动同步失败', error);
+});
 // 服务启动后补齐历史孩子头像的 img_key（仅处理缺失 key 的孩子）
 void backfillMissingChildAvatarKeysOnStartup();
 // 启动时若有模型余额为空，立即获取一次
@@ -1692,7 +1825,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.47' });
+    res.json({ success: true, version: '0.3.48' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1984,6 +2117,8 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
     });
     // 新增机器人后立即尝试初始化 WS，避免“启动时未配置”导致后续不接收消息
     void initFeishuWsClient();
+    // 新增机器人后尝试同步群菜单
+    void syncRobotMenusByRobotId(robot.id);
     res.json({ success: true, data: robot });
 });
 app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -2038,6 +2173,8 @@ app.put('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) =>
     });
     // 更新机器人后立即尝试初始化 WS，确保新增凭证可在当前进程生效
     void initFeishuWsClient();
+    // 更新机器人后尝试同步群菜单
+    void syncRobotMenusByRobotId(robotId);
     res.json({ success: true, data: updatedRobot });
 });
 app.delete('/api/robots/:robotId', requireAuth, requireRole('admin'), (req, res) => {
@@ -2125,20 +2262,7 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
         res.status(400).json({ success: false, error: 'chatId 不能为空' });
         return;
     }
-    let token = '';
-    store.update((draft) => {
-        const targetRobot = draft.robots.find((item) => item.id === robotId);
-        if (!targetRobot) {
-            return;
-        }
-        if (!targetRobot.menuBridgeTokens) {
-            targetRobot.menuBridgeTokens = {};
-        }
-        const existing = targetRobot.menuBridgeTokens[chatId]?.trim();
-        token = existing || nanoid(32);
-        targetRobot.menuBridgeTokens[chatId] = token;
-        targetRobot.updatedAt = new Date().toISOString();
-    });
+    const token = ensureRobotMenuBridgeToken(robotId, chatId);
     if (!token) {
         res.status(500).json({ success: false, error: '中转令牌生成失败' });
         return;
@@ -2150,6 +2274,10 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
             relativePath,
             url: buildMenuBridgeUrl(baseUrl, relativePath)
         };
+    });
+    // 生成链接后立即同步群菜单，确保后台一键生成后可直接生效。
+    void syncRobotGroupMenuToChat(robot, chatId).catch((error) => {
+        console.warn(`[群菜单同步] 生成链接后自动同步失败，robot=${robot.name} chatId=${chatId}`, error);
     });
     res.json({ success: true, data: { robotId, chatId, actionKeys, token, links } });
 });

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>飞书零花钱助手 - 群菜单中转</title>
+    <style>
+      :root {
+        --bg: #f7efe4;
+        --card: #fff9f2;
+        --ink: #4a2b15;
+        --muted: #8a6a55;
+        --ok: #0b7a38;
+        --err: #a1301f;
+        --accent: #d66b2c;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at 20% 10%, #ffe3c0 0 18%, transparent 19%),
+          radial-gradient(circle at 80% 90%, #ffd7b0 0 16%, transparent 17%),
+          var(--bg);
+        color: var(--ink);
+      }
+      .card {
+        width: min(460px, 100%);
+        background: var(--card);
+        border: 1px solid #f0d8bc;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(77, 43, 21, 0.12);
+        padding: 20px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .status {
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 10px;
+        background: #fff;
+        border: 1px dashed #e6c7a4;
+        font-size: 14px;
+        white-space: pre-wrap;
+      }
+      .ok { color: var(--ok); }
+      .err { color: var(--err); }
+      .btn {
+        margin-top: 14px;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>正在触发群内操作</h1>
+      <p>请稍候，系统会把结果卡片直接发送到当前群。</p>
+      <div id="status" class="status">初始化中...</div>
+      <button id="closeBtn" class="btn" type="button">关闭页面</button>
+    </main>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const closeBtn = document.getElementById('closeBtn');
+
+      function setStatus(message, ok) {
+        statusEl.textContent = message;
+        statusEl.className = `status ${ok ? 'ok' : 'err'}`;
+      }
+
+      function parseParams() {
+        const query = new URLSearchParams(window.location.search);
+        return {
+          robotId: (query.get('robotId') || '').trim(),
+          chatId: (query.get('chatId') || '').trim(),
+          actionKey: (query.get('actionKey') || '').trim(),
+          token: (query.get('token') || '').trim()
+        };
+      }
+
+      async function trigger() {
+        const payload = parseParams();
+        if (!payload.robotId || !payload.chatId || !payload.actionKey || !payload.token) {
+          setStatus('参数缺失：请检查群菜单链接是否完整。', false);
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/menu-bridge/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const raw = await response.text();
+          const result = raw ? JSON.parse(raw) : {};
+
+          if (!response.ok || result.success === false) {
+            throw new Error(result.error || `请求失败(${response.status})`);
+          }
+
+          setStatus('已触发成功，结果卡片已发送到群聊。\n本页面将尝试自动关闭。', true);
+          setTimeout(() => {
+            window.close();
+          }, 1000);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '触发失败';
+          setStatus(`触发失败：${message}`, false);
+        }
+      }
+
+      closeBtn.addEventListener('click', () => {
+        window.close();
+      });
+
+      trigger();
+    </script>
+  </body>
+</html>
