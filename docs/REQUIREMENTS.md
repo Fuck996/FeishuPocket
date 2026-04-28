@@ -1,5 +1,5 @@
 # 需求与BUG跟踪文档
-**版本：** v0.3.44 | **更新时间：** 2026-04-28 | **内容：** basic_batch 用户名查询支持 open/user/union 三种 ID 轮询，并输出 400 原始响应体
+**版本：** v0.3.45 | **更新时间：** 2026-04-28 | **内容：** basic_batch 权限报错给出明确提示；名称查询失败时回退事件 displayNameHint
 
 ## 待开发
 
@@ -47,6 +47,7 @@
 
 | 版本 | 发布日期 | 主要变更 |
 |------|----------|----------|
+| v0.3.45 | 2026-04-28 | 修复用户名查询报错可用性：basic_batch 在权限拒绝时输出明确缺失权限名（contact:user.basic.profile:readonly）；查询失败时回退飞书事件中的 displayNameHint，避免操作人长期显示“未知用户” |
 | v0.3.44 | 2026-04-28 | 修复 basic_batch 查询仍失败问题：按文档支持的 user_id_type（open_id/user_id/union_id）依次重试；HTTP 400 时输出原始响应体，便于精确定位飞书错误码与参数问题 |
 | v0.3.43 | 2026-04-28 | 按飞书文档调整用户名查询：优先调用 contact/v3/users/basic_batch（user_id_type=open_id）获取姓名；当 get 接口 code=0 但不返回 name 时可正确拿到姓名 |
 | v0.3.42 | 2026-04-28 | 每条飞书卡片末尾统一追加“模型余额”行；AI 识别路径改为调用后同步刷新余额（await checkModelBalances）再发送卡片，避免余额显示滞后 |

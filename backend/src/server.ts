@@ -264,8 +264,16 @@ async function queryFeishuUserNameByBasicBatch(tenantAccessToken: string, identi
 
       const rawText = await resp.text();
       if (!resp.ok) {
+        try {
+          const errData = JSON.parse(rawText) as { code?: number; msg?: string };
+          if (errData.code === 99991672 || (errData.msg ?? '').includes('Access denied')) {
+            console.warn('[用户名查询/basic_batch] 缺少权限 contact:user.basic.profile:readonly，请在飞书开放平台开启并发布后重试。');
+          }
+        } catch {
+          // ignore parse error
+        }
         console.warn(`[用户名查询/basic_batch] HTTP ${resp.status} idType=${candidate.idType} id=${candidate.id} raw=${rawText.slice(0, 500)}`);
-        continue;
+        return undefined;
       }
 
       let data: {
@@ -1678,7 +1686,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
 }
 
 app.get('/api/version', (_req, res) => {
-  res.json({ success: true, version: '0.3.44' });
+  res.json({ success: true, version: '0.3.45' });
 });
 
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
@@ -2664,7 +2672,7 @@ async function processBotMessage(
     userId: senderUserId,
     unionId: senderUnionId,
     displayNameHint: senderDisplayNameHint
-  });
+  }) ?? senderDisplayNameHint;
 
   const targetChild = resolveChildFromAction(action, robot);
   if (!targetChild && action.intent !== 'set_weekly_notify') {
