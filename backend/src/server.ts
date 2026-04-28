@@ -1433,10 +1433,9 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<s
 }
 
 function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<string, unknown> {
-  // 飞书群菜单：2级结构，上限3个一级菜单，每个一级菜单最多5个子菜单
-  // 正确格式：每个菜单项包在 chat_menu_item 对象中，name 字段而非 chat_menu_item_name
-  // redirect_link 是对象 { common_url: "..." } 而非字符串
-  const makeLink = (name: string, url: string) => ({
+  // 飞书群菜单：2级结构，请求体字段名为 chat_menu_top_levels（非 chat_menu_items）
+  // 结构与响应体一致：顶层用 NONE 类型，子项用 REDIRECT_LINK + redirect_link 对象
+  const makeChild = (name: string, url: string) => ({
     chat_menu_item: {
       action_type: 'REDIRECT_LINK',
       name,
@@ -1446,20 +1445,20 @@ function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<strin
 
   return {
     menu_tree: {
-      chat_menu_items: [
+      chat_menu_top_levels: [
         {
           chat_menu_item: { action_type: 'NONE', name: '控制中心' },
           children: [
-            makeLink('控制台', linkMap['show_control_center']),
-            makeLink('快捷指令查询', linkMap['show_help_card']),
-            makeLink('查询余额', linkMap['query_balance'])
+            makeChild('控制台', linkMap['show_control_center']),
+            makeChild('快捷指令查询', linkMap['show_help_card']),
+            makeChild('查询余额', linkMap['query_balance'])
           ]
         },
         {
           chat_menu_item: { action_type: 'NONE', name: '数据统计' },
           children: [
-            makeLink('月统计', linkMap['show_monthly_stats']),
-            makeLink('周统计', linkMap['show_weekly_stats'])
+            makeChild('月统计', linkMap['show_monthly_stats']),
+            makeChild('周统计', linkMap['show_weekly_stats'])
           ]
         }
       ]
