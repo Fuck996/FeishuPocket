@@ -1126,6 +1126,37 @@ function buildMenuBridgeUrl(baseUrl, pathWithQuery) {
     }
     return `${normalizedBaseUrl}${pathWithQuery}`;
 }
+function tryResolveBaseUrlFromWebhookUrl(webhookUrl) {
+    const normalized = webhookUrl?.trim();
+    if (!normalized) {
+        return undefined;
+    }
+    try {
+        const parsed = new URL(normalized);
+        if (!/^https?:$/i.test(parsed.protocol)) {
+            return undefined;
+        }
+        return parsed.origin;
+    }
+    catch {
+        return undefined;
+    }
+}
+function resolveMenuBridgeBaseUrl(robot, incomingBaseUrl) {
+    const incoming = incomingBaseUrl?.trim().replace(/\/+$/, '');
+    if (incoming) {
+        return incoming;
+    }
+    const persisted = robot.menuBridgeBaseUrl?.trim().replace(/\/+$/, '');
+    if (persisted) {
+        return persisted;
+    }
+    const fromEnv = process.env.MENU_BRIDGE_BASE_URL?.trim().replace(/\/+$/, '');
+    if (fromEnv) {
+        return fromEnv;
+    }
+    return tryResolveBaseUrlFromWebhookUrl(robot.feishuWebhookUrl);
+}
 function ensureRobotMenuBridgeToken(robotId, chatId) {
     let token = '';
     store.update((draft) => {
@@ -1160,7 +1191,7 @@ function collectRobotMenuChatIds(robot) {
     return Array.from(ids);
 }
 function buildRobotMenuBridgeLinks(robot, chatId) {
-    const baseUrl = robot.menuBridgeBaseUrl?.trim() || process.env.MENU_BRIDGE_BASE_URL?.trim();
+    const baseUrl = resolveMenuBridgeBaseUrl(robot);
     if (!baseUrl) {
         return [];
     }
@@ -1205,7 +1236,7 @@ async function syncRobotGroupMenuToChat(robot, chatId) {
     }
     const links = buildRobotMenuBridgeLinks(robot, chatId);
     if (links.length === 0) {
-        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：未配置 menuBridgeBaseUrl/MENU_BRIDGE_BASE_URL 或链接生成失败`);
+        console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：未配置 menuBridgeBaseUrl/MENU_BRIDGE_BASE_URL 且无法从 webhook URL 推导域名，或链接生成失败`);
         return;
     }
     const tenantAccessToken = await getFeishuTenantAccessToken(robot);
@@ -1825,7 +1856,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.49' });
+    res.json({ success: true, version: '0.3.50' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -2258,8 +2289,8 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
     }
     const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : '';
     const actionKeys = normalizeMenuBridgeActionKeys(req.body?.actionKeys);
-    const incomingBaseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl.trim().replace(/\/+$/, '') : '';
-    const baseUrl = incomingBaseUrl || robot.menuBridgeBaseUrl?.trim() || process.env.MENU_BRIDGE_BASE_URL?.trim();
+    const incomingBaseUrl = typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined;
+    const baseUrl = resolveMenuBridgeBaseUrl(robot, incomingBaseUrl);
     if (!chatId) {
         res.status(400).json({ success: false, error: 'chatId 不能为空' });
         return;
@@ -2268,13 +2299,13 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
         res.status(400).json({ success: false, error: '缺少中转页基地址，请传 baseUrl 或配置机器人 menuBridgeBaseUrl / 环境变量 MENU_BRIDGE_BASE_URL' });
         return;
     }
-    if (incomingBaseUrl) {
+    if (!robot.menuBridgeBaseUrl || incomingBaseUrl) {
         store.update((draft) => {
             const targetRobot = draft.robots.find((item) => item.id === robotId);
             if (!targetRobot) {
                 return;
             }
-            targetRobot.menuBridgeBaseUrl = incomingBaseUrl;
+            targetRobot.menuBridgeBaseUrl = baseUrl;
             targetRobot.updatedAt = new Date().toISOString();
         });
     }
@@ -2292,8 +2323,9 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
         };
     });
     // 生成链接后立即同步群菜单，确保后台一键生成后可直接生效。
-    void syncRobotGroupMenuToChat(robot, chatId).catch((error) => {
-        console.warn(`[群菜单同步] 生成链接后自动同步失败，robot=${robot.name} chatId=${chatId}`, error);
+    const latestRobot = store.getSnapshot().robots.find((item) => item.id === robotId) ?? robot;
+    void syncRobotGroupMenuToChat(latestRobot, chatId).catch((error) => {
+        console.warn(`[群菜单同步] 生成链接后自动同步失败，robot=${latestRobot.name} chatId=${chatId}`, error);
     });
     res.json({ success: true, data: { robotId, chatId, actionKeys, token, links } });
 });
