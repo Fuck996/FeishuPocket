@@ -1404,44 +1404,58 @@ function collectRobotMenuChatIds(robot: RobotConfig): string[] {
   return Array.from(ids);
 }
 
-function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Array<{ name: string; url: string }> {
+function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): Record<string, string> | null {
   const baseUrl = resolveMenuBridgeBaseUrl(robot);
   if (!baseUrl) {
-    return [];
+    return null;
   }
 
   const token = ensureRobotMenuBridgeToken(robot.id, chatId);
   if (!token) {
-    return [];
+    return null;
   }
 
-  const actionConfig: Array<{ actionKey: MenuBridgeActionKey; name: string }> = [
-    { actionKey: 'show_control_center', name: '控制中心' },
-    { actionKey: 'show_help_card', name: '快捷指令' },
-    { actionKey: 'query_balance', name: '余额查询' },
-    { actionKey: 'show_weekly_stats', name: '周统计' },
-    { actionKey: 'show_monthly_stats', name: '月统计' },
-    { actionKey: 'manual_grant_daily_allowance', name: '发放零花钱' }
+  // 仅生成群菜单需要的5个动作的链接（排除发放零花钱）
+  const actionKeys: MenuBridgeActionKey[] = [
+    'show_control_center',
+    'show_help_card',
+    'query_balance',
+    'show_monthly_stats',
+    'show_weekly_stats'
   ];
 
-  return actionConfig.map((item) => {
-    const relativePath = buildMenuBridgePath(robot.id, chatId, item.actionKey, token);
-    return {
-      name: item.name,
-      url: buildMenuBridgeUrl(baseUrl, relativePath)
-    };
-  });
+  const linkMap: Record<string, string> = {};
+  for (const actionKey of actionKeys) {
+    const relativePath = buildMenuBridgePath(robot.id, chatId, actionKey, token);
+    linkMap[actionKey] = buildMenuBridgeUrl(baseUrl, relativePath);
+  }
+  return linkMap;
 }
 
-function buildFeishuGroupMenuTree(links: Array<{ name: string; url: string }>): Record<string, unknown> {
-  // 飞书群菜单仅支持跳转，实际动作通过中转页触发后端接口完成。
+function buildFeishuGroupMenuTree(linkMap: Record<string, string>): Record<string, unknown> {
+  // 飞书群菜单：2级结构，上限3个一级菜单，每个一级菜单最多5个子菜单
+  // 一级菜单使用 NONE 类型（纯标题，无跳转），子菜单使用 REDIRECT_LINK 类型
   return {
     menu_tree: {
-      chat_menu_items: links.map((item) => ({
-        chat_menu_item_name: item.name,
-        action_type: 'REDIRECT_LINK',
-        redirect_link: item.url
-      }))
+      chat_menu_items: [
+        {
+          action_type: 'NONE',
+          chat_menu_item_name: '控制中心',
+          children: [
+            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '控制台', redirect_link: linkMap['show_control_center'] },
+            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '快捷指令查询', redirect_link: linkMap['show_help_card'] },
+            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '查询余额', redirect_link: linkMap['query_balance'] }
+          ]
+        },
+        {
+          action_type: 'NONE',
+          chat_menu_item_name: '数据统计',
+          children: [
+            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '月统计', redirect_link: linkMap['show_monthly_stats'] },
+            { action_type: 'REDIRECT_LINK', chat_menu_item_name: '周统计', redirect_link: linkMap['show_weekly_stats'] }
+          ]
+        }
+      ]
     }
   };
 }
@@ -1454,8 +1468,8 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     return;
   }
 
-  const links = buildRobotMenuBridgeLinks(robot, chatId);
-  if (links.length === 0) {
+  const linkMap = buildRobotMenuBridgeLinks(robot, chatId);
+  if (!linkMap) {
     console.warn(`[群菜单同步] 跳过机器人 ${robot.name} chatId=${chatId}，原因：未配置 menuBridgeBaseUrl/MENU_BRIDGE_BASE_URL 且无法从 webhook URL 推导域名，或链接生成失败`);
     return;
   }
@@ -1466,13 +1480,26 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     return;
   }
 
-  const response = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`, {
+  // 飞书菜单API是追加型，需要先删除旧菜单再创建新菜单
+  const menuUrl = `https://open.feishu.cn/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`;
+  const authHeaders = {
+    Authorization: `Bearer ${tenantAccessToken}`,
+    'Content-Type': 'application/json; charset=utf-8'
+  };
+
+  const deleteResponse = await fetch(menuUrl, { method: 'DELETE', headers: authHeaders });
+  const deleteRaw = await deleteResponse.text();
+  let deleteResult: { code?: number; msg?: string } = {};
+  try { deleteResult = deleteRaw ? JSON.parse(deleteRaw) as { code?: number; msg?: string } : {}; } catch { deleteResult = {}; }
+  // 删除失败不阻断流程（可能是本来就没有菜单）
+  if (deleteResult.code !== 0) {
+    console.warn(`[群菜单同步] 删除旧菜单返回：code=${deleteResult.code ?? 'N/A'} msg=${deleteResult.msg ?? deleteRaw.slice(0, 100)}`);
+  }
+
+  const response = await fetch(menuUrl, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${tenantAccessToken}`,
-      'Content-Type': 'application/json; charset=utf-8'
-    },
-    body: JSON.stringify(buildFeishuGroupMenuTree(links))
+    headers: authHeaders,
+    body: JSON.stringify(buildFeishuGroupMenuTree(linkMap))
   });
 
   const rawText = await response.text();
@@ -1488,7 +1515,7 @@ async function syncRobotGroupMenuToChat(robot: RobotConfig, chatId: string): Pro
     throw new Error(`群菜单同步失败：${detail}`);
   }
 
-  console.log(`[群菜单同步] 已同步机器人 ${robot.name} chatId=${chatId}，菜单项=${links.length}`);
+  console.log(`[群菜单同步] 已同步机器人 ${robot.name} chatId=${chatId}，2级菜单结构（控制中心/数据统计）`);
 }
 
 async function syncRobotMenusByRobotId(robotId: string): Promise<void> {
