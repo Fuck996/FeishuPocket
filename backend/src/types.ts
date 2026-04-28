@@ -48,6 +48,8 @@ export interface RobotConfig {
   feishuSigningSecret?: string;
   feishuDefaultChatId?: string;
   lastActiveChatId?: string;
+  // 群菜单中转令牌（按群 chatId 维度）
+  menuBridgeTokens?: Record<string, string>;
   createdAt: string;
   updatedAt: string;
 }
@@ -135,7 +137,7 @@ export interface AppStore {
 }
 
 export interface ParsedBotAction {
-  intent: 'set_daily_allowance' | 'set_reward_rule' | 'deduct_expense' | 'set_weekly_notify' | 'reward_from_message' | 'query_balance' | 'manual_grant_daily_allowance' | 'increase_balance' | 'decrease_balance' | 'show_help' | 'unknown';
+  intent: 'set_daily_allowance' | 'set_reward_rule' | 'deduct_expense' | 'set_weekly_notify' | 'reward_from_message' | 'query_balance' | 'manual_grant_daily_allowance' | 'increase_balance' | 'decrease_balance' | 'show_help' | 'show_control_center' | 'show_weekly_stats' | 'show_monthly_stats' | 'unknown';
   childName?: string;
   amount?: number;
   rewardKeyword?: string;

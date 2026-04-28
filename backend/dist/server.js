@@ -481,18 +481,23 @@ function parsePreciseBotCommand(text) {
         .replace(/[＋]/g, '+')
         .replace(/[－−]/g, '-')
         .replace(/[：]/g, ':');
+    const precise = normalized.replace(/^\/+/, '').trim();
     // 0) 帮助 / 指令 / 说明
-    if (/^(帮助|指令|说明)$/.test(normalized)) {
+    if (/^(帮助|指令|说明)$/.test(precise)) {
         return { intent: 'show_help' };
     }
+    // 0.1) 控制台
+    if (/^控制台$/.test(precise)) {
+        return { intent: 'show_control_center' };
+    }
     // 1) 发放零花钱（精确指令不接收孩子名，默认按机器人绑定孩子执行）
-    if (/^发放零花钱$/.test(normalized)) {
+    if (/^发放零花钱$/.test(precise)) {
         return {
             intent: 'manual_grant_daily_allowance'
         };
     }
     // 2) 余额增加：n
-    const increase = normalized.match(/^余额增加\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
+    const increase = precise.match(/^余额增加\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
     if (increase) {
         return {
             intent: 'increase_balance',
@@ -500,7 +505,7 @@ function parsePreciseBotCommand(text) {
         };
     }
     // 2.1) +n
-    const increaseShort = normalized.match(/^\+\s*(\d+(?:\.\d+)?)$/);
+    const increaseShort = precise.match(/^\+\s*(\d+(?:\.\d+)?)$/);
     if (increaseShort) {
         return {
             intent: 'increase_balance',
@@ -508,7 +513,7 @@ function parsePreciseBotCommand(text) {
         };
     }
     // 3) 余额减少：n
-    const decrease = normalized.match(/^余额减少\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
+    const decrease = precise.match(/^余额减少\s*[：:]\s*(-?\d+(?:\.\d+)?)$/);
     if (decrease) {
         return {
             intent: 'decrease_balance',
@@ -516,7 +521,7 @@ function parsePreciseBotCommand(text) {
         };
     }
     // 3.1) -n
-    const decreaseShort = normalized.match(/^\-\s*(\d+(?:\.\d+)?)$/);
+    const decreaseShort = precise.match(/^\-\s*(\d+(?:\.\d+)?)$/);
     if (decreaseShort) {
         return {
             intent: 'decrease_balance',
@@ -524,8 +529,16 @@ function parsePreciseBotCommand(text) {
         };
     }
     // 4) 查询余额 / 余额
-    if (/^(查询余额|余额)$/.test(normalized)) {
+    if (/^(查询余额|余额)$/.test(precise)) {
         return { intent: 'query_balance' };
+    }
+    // 5) 周统计
+    if (/^周统计$/.test(precise)) {
+        return { intent: 'show_weekly_stats' };
+    }
+    // 6) 月统计
+    if (/^月统计$/.test(precise)) {
+        return { intent: 'show_monthly_stats' };
     }
     return null;
 }
@@ -874,6 +887,244 @@ function buildBalanceSnapshotCardPayload(child) {
         };
     }
     return basePayload;
+}
+function buildHelpCardPayload() {
+    return {
+        title: '快捷指令说明',
+        lines: [
+            `**精确指令（格式正确即立即执行，不走 AI）**`,
+            `1. 控制台：发送控制中心卡片到当前群`,
+            `2. 发放零花钱：立刻发放今日零花钱`,
+            `3. 余额增加：n，或直接输入 +n`,
+            `4. 余额减少：n，或直接输入 -n`,
+            `5. 查询余额 / 余额`,
+            `6. 周统计`,
+            `7. 月统计`,
+            `8. 帮助 / 指令 / 说明`,
+            `**补充说明**：以上精确指令均支持斜杠前缀，例如 /余额、/周统计、/发放零花钱。`,
+            `**自然语言说明**：带有消费信息或复杂描述的对话会进入 AI 识别，例如“扣掉5元，因为初始金额设置错误”。`,
+            `**失败反馈**：若精确指令和 AI 都未识别，将返回“指令无法识别”的反馈卡片。`
+        ],
+        color: 'blue'
+    };
+}
+function getRelativeWeekRange(offsetWeeks) {
+    const now = new Date();
+    const start = new Date(now);
+    const currentDay = start.getDay();
+    const mondayOffset = currentDay === 0 ? -6 : 1 - currentDay;
+    start.setDate(start.getDate() + mondayOffset + offsetWeeks * 7);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return {
+        start,
+        end,
+        labelStart: start.toISOString().slice(0, 10),
+        labelEnd: end.toISOString().slice(0, 10)
+    };
+}
+function getRelativeMonthRange(offsetMonths) {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0, 23, 59, 59, 999);
+    return {
+        start,
+        end,
+        labelStart: start.toISOString().slice(0, 10),
+        labelEnd: end.toISOString().slice(0, 10)
+    };
+}
+function calculateRemainingAmountAt(childId, periodEnd) {
+    const child = findChildById(childId);
+    if (!child) {
+        return 0;
+    }
+    const afterPeriodDelta = store.getSnapshot().transactions
+        .filter((item) => item.childId === childId && new Date(item.createdAt).getTime() > periodEnd.getTime())
+        .reduce((sum, item) => sum + item.amount, 0);
+    return child.balance - afterPeriodDelta;
+}
+function summarizeChildPeriod(child, start, end) {
+    const records = store.getSnapshot().transactions.filter((item) => {
+        if (item.childId !== child.id) {
+            return false;
+        }
+        const time = new Date(item.createdAt).getTime();
+        return time >= start.getTime() && time <= end.getTime();
+    });
+    return {
+        increasedAmount: records.filter((item) => item.amount > 0).reduce((sum, item) => sum + item.amount, 0),
+        expenseAmount: records.filter((item) => item.amount < 0).reduce((sum, item) => sum + Math.abs(item.amount), 0),
+        remainingAmount: calculateRemainingAmountAt(child.id, end),
+        hasData: records.length > 0
+    };
+}
+function formatPeriodAmount(value, hasData) {
+    return hasData ? amountYuan(value) : '无数据';
+}
+function formatComparisonHighlight(currentRemaining, previousRemaining, compareLabel) {
+    const delta = currentRemaining - previousRemaining;
+    const text = `较${compareLabel}${delta >= 0 ? '+' : ''}${delta.toFixed(2)}元`;
+    return `<font color='green'>${text}</font>`;
+}
+async function buildWeeklyStatsCardPayload(child) {
+    const previousWeekRange = getRelativeWeekRange(-1);
+    const currentWeekRange = getRelativeWeekRange(0);
+    const previousWeek = summarizeChildPeriod(child, previousWeekRange.start, previousWeekRange.end);
+    const currentWeek = summarizeChildPeriod(child, currentWeekRange.start, currentWeekRange.end);
+    const avatarKey = await ensureChildFeishuAvatarKey(child);
+    return {
+        title: `${child.name}周统计`,
+        avatarKey: avatarKey ?? child.feishuAvatarKey,
+        lines: [
+            `**对象**：${child.name}`,
+            `**上周周期**：${previousWeekRange.labelStart} ~ ${previousWeekRange.labelEnd}`,
+            `**上周零花钱总额**：${formatPeriodAmount(previousWeek.increasedAmount, previousWeek.hasData)}`,
+            `**上周花费总额**：${formatPeriodAmount(previousWeek.expenseAmount, previousWeek.hasData)}`,
+            `**上周结余**：${formatPeriodAmount(previousWeek.remainingAmount, previousWeek.hasData)}`,
+            `**本周周期**：${currentWeekRange.labelStart} ~ ${currentWeekRange.labelEnd}`,
+            `**本周零花钱总额**：${formatPeriodAmount(currentWeek.increasedAmount, currentWeek.hasData)}`,
+            `**本周花费总额**：${formatPeriodAmount(currentWeek.expenseAmount, currentWeek.hasData)}`,
+            `**本周结余**：${formatPeriodAmount(currentWeek.remainingAmount, currentWeek.hasData)}`,
+            `**本周较上周结余变化**：${previousWeek.hasData && currentWeek.hasData ? formatComparisonHighlight(currentWeek.remainingAmount, previousWeek.remainingAmount, '上周') : '无数据'}`
+        ],
+        color: 'turquoise'
+    };
+}
+async function buildMonthlyStatsCardPayload(child) {
+    const previousMonthRange = getRelativeMonthRange(-1);
+    const currentMonthRange = getRelativeMonthRange(0);
+    const previousMonth = summarizeChildPeriod(child, previousMonthRange.start, previousMonthRange.end);
+    const currentMonth = summarizeChildPeriod(child, currentMonthRange.start, currentMonthRange.end);
+    const avatarKey = await ensureChildFeishuAvatarKey(child);
+    return {
+        title: `${child.name}月统计`,
+        avatarKey: avatarKey ?? child.feishuAvatarKey,
+        lines: [
+            `**对象**：${child.name}`,
+            `**上月周期**：${previousMonthRange.labelStart} ~ ${previousMonthRange.labelEnd}`,
+            `**上月零花钱总额**：${formatPeriodAmount(previousMonth.increasedAmount, previousMonth.hasData)}`,
+            `**上月花费总额**：${formatPeriodAmount(previousMonth.expenseAmount, previousMonth.hasData)}`,
+            `**上月结余**：${formatPeriodAmount(previousMonth.remainingAmount, previousMonth.hasData)}`,
+            `**本月周期**：${currentMonthRange.labelStart} ~ ${currentMonthRange.labelEnd}`,
+            `**本月零花钱总额**：${formatPeriodAmount(currentMonth.increasedAmount, currentMonth.hasData)}`,
+            `**本月花费总额**：${formatPeriodAmount(currentMonth.expenseAmount, currentMonth.hasData)}`,
+            `**本月结余**：${formatPeriodAmount(currentMonth.remainingAmount, currentMonth.hasData)}`,
+            `**本月较上月结余变化**：${previousMonth.hasData && currentMonth.hasData ? formatComparisonHighlight(currentMonth.remainingAmount, previousMonth.remainingAmount, '上月') : '无数据'}`
+        ],
+        color: 'green'
+    };
+}
+function buildControlCenterCardPayload(child) {
+    return {
+        title: '控制中心',
+        avatarKey: child.feishuAvatarKey,
+        lines: [
+            `**对象**：${child.name}`,
+            `**说明**：下方按钮会直接把对应结果卡片发送到当前群。`,
+            `**快捷入口**：立刻发放今日零花钱、查询余额、查看快捷指令、周统计、月统计。`
+        ],
+        actions: [
+            { text: '发放今日零花钱', type: 'primary', value: { action: 'manual_grant_daily_allowance' } },
+            { text: '查询余额', type: 'default', value: { action: 'query_balance' } },
+            { text: '快捷指令', type: 'default', value: { action: 'show_help_card' } },
+            { text: '周统计', type: 'default', value: { action: 'show_weekly_stats' } },
+            { text: '月统计', type: 'default', value: { action: 'show_monthly_stats' } }
+        ],
+        color: 'wathet'
+    };
+}
+async function sendRobotCardAndLog(robot, payload, chatId, childId) {
+    const messageId = await sendRobotCard(payload, chatId, childId);
+    pushBotLog({
+        id: nanoid(),
+        robotId: robot.id,
+        time: new Date().toISOString(),
+        direction: 'out',
+        chatId,
+        messageId,
+        msgType: 'interactive',
+        cardTitle: payload.title,
+        status: 'ok'
+    });
+    return messageId;
+}
+async function triggerRobotQuickAction(robot, actionKey, chatId, actor) {
+    const targetChild = getDefaultChildForRobot(robot);
+    if (!targetChild) {
+        throw new Error('当前机器人未绑定小孩');
+    }
+    if (actionKey === 'show_control_center') {
+        await sendRobotCardAndLog(robot, buildControlCenterCardPayload(targetChild), chatId, targetChild.id);
+        return { title: '控制中心' };
+    }
+    if (actionKey === 'show_help_card') {
+        await sendRobotCardAndLog(robot, buildHelpCardPayload(), chatId, targetChild.id);
+        return { title: '快捷指令说明' };
+    }
+    if (actionKey === 'query_balance') {
+        await sendRobotCardAndLog(robot, buildBalanceSnapshotCardPayload(targetChild), chatId, targetChild.id);
+        return { title: '余额查询结果' };
+    }
+    if (actionKey === 'show_weekly_stats') {
+        const payload = await buildWeeklyStatsCardPayload(targetChild);
+        await sendRobotCardAndLog(robot, payload, chatId, targetChild.id);
+        return { title: payload.title };
+    }
+    if (actionKey === 'show_monthly_stats') {
+        const payload = await buildMonthlyStatsCardPayload(targetChild);
+        await sendRobotCardAndLog(robot, payload, chatId, targetChild.id);
+        return { title: payload.title };
+    }
+    if (actionKey === 'manual_grant_daily_allowance') {
+        await applyTransaction({
+            childId: targetChild.id,
+            amount: targetChild.dailyAllowance,
+            reason: '立刻发放今日零花钱',
+            type: 'daily',
+            source: 'bot',
+            actorUserId: actor?.openId,
+            actorDisplayName: actor?.displayName,
+            chatIdOverride: chatId
+        });
+        const today = new Date().toISOString().slice(0, 10);
+        store.update((draft) => {
+            if (!draft.config.lastDailyGrantTimes) {
+                draft.config.lastDailyGrantTimes = {};
+            }
+            draft.config.lastDailyGrantTimes[targetChild.id] = today;
+        });
+        return { title: '零花钱金额变动通知' };
+    }
+    throw new Error('不支持的动作');
+}
+const MENU_BRIDGE_ALLOWED_ACTIONS = [
+    'show_control_center',
+    'show_help_card',
+    'query_balance',
+    'show_weekly_stats',
+    'show_monthly_stats',
+    'manual_grant_daily_allowance'
+];
+function normalizeMenuBridgeActionKeys(input) {
+    const source = Array.isArray(input) ? input : MENU_BRIDGE_ALLOWED_ACTIONS;
+    const normalized = Array.from(new Set(source
+        .map((item) => String(item ?? '').trim())
+        .filter((item) => MENU_BRIDGE_ALLOWED_ACTIONS.includes(item))));
+    return normalized.length > 0 ? normalized : [...MENU_BRIDGE_ALLOWED_ACTIONS];
+}
+function buildMenuBridgePath(robotId, chatId, actionKey, token) {
+    const query = new URLSearchParams({ robotId, chatId, actionKey, token });
+    return `/menu-bridge.html?${query.toString()}`;
+}
+function buildMenuBridgeUrl(baseUrl, pathWithQuery) {
+    const normalizedBaseUrl = (baseUrl ?? '').trim().replace(/\/+$/, '');
+    if (!normalizedBaseUrl) {
+        return pathWithQuery;
+    }
+    return `${normalizedBaseUrl}${pathWithQuery}`;
 }
 function inferSuggestion(increasedAmount, expenseAmount, remainingAmount) {
     if (increasedAmount === 0 && expenseAmount === 0) {
@@ -1441,7 +1692,7 @@ if (store.getAllModels().some((m) => m.provider === 'deepseek' && m.apiKey && m.
     void checkModelBalances();
 }
 app.get('/api/version', (_req, res) => {
-    res.json({ success: true, version: '0.3.44' });
+    res.json({ success: true, version: '0.3.47' });
 });
 app.get('/api/feishu/ws-status', requireAuth, requireRole('admin'), (_req, res) => {
     const reconnectInfo = wsClient?.getReconnectInfo();
@@ -1724,6 +1975,7 @@ app.post('/api/robots', requireAuth, requireRole('admin'), (req, res) => {
         feishuVerificationToken: feishuVerificationToken ?? undefined,
         feishuSigningSecret: feishuSigningSecret ?? undefined,
         feishuDefaultChatId: feishuDefaultChatId ?? undefined,
+        menuBridgeTokens: {},
         createdAt: now,
         updatedAt: now
     };
@@ -1831,6 +2083,75 @@ app.post('/api/robots/:robotId/test', requireAuth, requireRole('admin'), async (
         const message = error instanceof Error ? error.message : '发送失败';
         res.status(500).json({ success: false, error: message });
     }
+});
+app.post('/api/robots/:robotId/actions/:actionKey', requireAuth, requireRole('admin'), async (req, res) => {
+    const { robotId, actionKey } = req.params;
+    const robot = store.getSnapshot().robots.find((item) => item.id === robotId);
+    if (!robot) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    const normalizedActionKey = String(actionKey ?? '').trim();
+    const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : undefined;
+    if (!normalizedActionKey) {
+        res.status(400).json({ success: false, error: '动作不能为空' });
+        return;
+    }
+    try {
+        const result = await triggerRobotQuickAction(robot, normalizedActionKey, chatId, {
+            openId: req.authUser?.boundFeishuUserId,
+            displayName: req.authUser?.username
+        });
+        res.json({ success: true, message: `${result.title}已发送`, data: { actionKey: normalizedActionKey } });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : '发送失败';
+        res.status(400).json({ success: false, error: message });
+    }
+});
+app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('admin'), (req, res) => {
+    const { robotId } = req.params;
+    const robot = store.getSnapshot().robots.find((item) => item.id === robotId);
+    if (!robot) {
+        res.status(404).json({ success: false, error: '机器人不存在' });
+        return;
+    }
+    const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : '';
+    const actionKeys = normalizeMenuBridgeActionKeys(req.body?.actionKeys);
+    const baseUrl = typeof req.body?.baseUrl === 'string' && req.body.baseUrl.trim()
+        ? req.body.baseUrl.trim()
+        : process.env.MENU_BRIDGE_BASE_URL?.trim();
+    if (!chatId) {
+        res.status(400).json({ success: false, error: 'chatId 不能为空' });
+        return;
+    }
+    let token = '';
+    store.update((draft) => {
+        const targetRobot = draft.robots.find((item) => item.id === robotId);
+        if (!targetRobot) {
+            return;
+        }
+        if (!targetRobot.menuBridgeTokens) {
+            targetRobot.menuBridgeTokens = {};
+        }
+        const existing = targetRobot.menuBridgeTokens[chatId]?.trim();
+        token = existing || nanoid(32);
+        targetRobot.menuBridgeTokens[chatId] = token;
+        targetRobot.updatedAt = new Date().toISOString();
+    });
+    if (!token) {
+        res.status(500).json({ success: false, error: '中转令牌生成失败' });
+        return;
+    }
+    const links = actionKeys.map((actionKey) => {
+        const relativePath = buildMenuBridgePath(robotId, chatId, actionKey, token);
+        return {
+            actionKey,
+            relativePath,
+            url: buildMenuBridgeUrl(baseUrl, relativePath)
+        };
+    });
+    res.json({ success: true, data: { robotId, chatId, actionKeys, token, links } });
 });
 // 查询机器人运行日志（内存，最多 200 条，倒序）
 app.get('/api/robots/:robotId/logs', requireAuth, requireRole('admin'), (req, res) => {
@@ -2047,12 +2368,32 @@ app.get('/api/weekly-summaries', requireAuth, (req, res) => {
 // 处理卡片按钮回调（card.action.trigger），返回飞书 toast 响应
 async function handleCardAction(eventData) {
     const data = eventData;
+    const { senderOpenId, senderDisplayNameHint } = extractFeishuEvent(data);
     const action = data.action;
     const actionValue = action?.value ?? {};
     const actionType = actionValue['action'];
     const contextObj = data.context;
     const chatId = contextObj?.open_chat_id;
+    const robot = resolveDiagnosticRobot(chatId);
+    if (robot && senderOpenId && robot.controllerOpenIds.length > 0 && !robot.controllerOpenIds.includes(senderOpenId)) {
+        return { toast: { type: 'error', content: '无权操作', i18n: { zh_cn: '无权操作' } } };
+    }
     switch (actionType) {
+        case 'show_control_center':
+        case 'show_help_card':
+        case 'query_balance':
+        case 'show_weekly_stats':
+        case 'show_monthly_stats':
+        case 'manual_grant_daily_allowance': {
+            if (!robot) {
+                return { toast: { type: 'error', content: '未找到机器人上下文', i18n: { zh_cn: '未找到机器人上下文' } } };
+            }
+            await triggerRobotQuickAction(robot, actionType, chatId, {
+                openId: senderOpenId,
+                displayName: senderDisplayNameHint
+            });
+            return { toast: { type: 'success', content: '已发送到当前群', i18n: { zh_cn: '已发送到当前群' } } };
+        }
         case 'undo_transaction': {
             const transactionId = actionValue['transactionId'];
             const childId = actionValue['childId'];
@@ -2241,7 +2582,7 @@ async function processBotMessage(channel, senderOpenId, senderUserId, senderUnio
                 title: '❓ 指令无法识别',
                 lines: [
                     `**原始消息**：${text}`,
-                    `**提示**：支持操作包括发放零花钱、余额增减、查询余额、设置额度/奖励/周报时间；输入“帮助”可查看完整说明。`
+                    `**提示**：支持操作包括控制台、立刻发放今日零花钱、余额增减、查询余额、周统计、月统计、设置额度/奖励/周报时间；输入“帮助”可查看完整说明。`
                 ],
                 color: 'orange'
             }, chatId);
@@ -2380,7 +2721,7 @@ async function processBotMessage(channel, senderOpenId, senderUserId, senderUnio
                 await applyTransaction({
                     childId: targetChild.id,
                     amount: targetChild.dailyAllowance,
-                    reason: '手动发放零花钱',
+                    reason: '立刻发放今日零花钱',
                     type: 'daily',
                     source: 'bot',
                     actorUserId: senderOpenId,
@@ -2445,33 +2786,28 @@ async function processBotMessage(channel, senderOpenId, senderUserId, senderUnio
                 break;
             }
             case 'show_help': {
-                const payload = {
-                    title: '指令说明',
-                    lines: [
-                        `**精确指令（格式正确即立即执行，不走 AI）**`,
-                        `1. 发放零花钱`,
-                        `2. 余额增加：n，或直接输入 +n`,
-                        `3. 余额减少：n，或直接输入 -n`,
-                        `4. 查询余额 / 余额`,
-                        `5. 帮助 / 指令 / 说明`,
-                        `\n**自然语言说明**`,
-                        `带有消费信息或复杂描述的对话会进入 AI 识别，例如：\"扣掉5元，因为初始金额设置错误\"。`,
-                        `若精确指令和 AI 都未识别，将返回“指令无法识别”的反馈。`
-                    ],
-                    color: 'blue'
-                };
-                const msgId = await sendRobotCard(payload, chatId, targetChild?.id);
-                pushBotLog({
-                    id: nanoid(),
-                    robotId: robot.id,
-                    time: new Date().toISOString(),
-                    direction: 'out',
-                    chatId,
-                    messageId: msgId,
-                    msgType: 'interactive',
-                    cardTitle: payload.title,
-                    status: 'ok'
-                });
+                const payload = buildHelpCardPayload();
+                await sendRobotCardAndLog(robot, payload, chatId, targetChild?.id);
+                break;
+            }
+            case 'show_control_center': {
+                if (!targetChild)
+                    throw new Error('未找到目标小孩或无权限');
+                await sendRobotCardAndLog(robot, buildControlCenterCardPayload(targetChild), chatId, targetChild.id);
+                break;
+            }
+            case 'show_weekly_stats': {
+                if (!targetChild)
+                    throw new Error('未找到目标小孩或无权限');
+                const payload = await buildWeeklyStatsCardPayload(targetChild);
+                await sendRobotCardAndLog(robot, payload, chatId, targetChild.id);
+                break;
+            }
+            case 'show_monthly_stats': {
+                if (!targetChild)
+                    throw new Error('未找到目标小孩或无权限');
+                const payload = await buildMonthlyStatsCardPayload(targetChild);
+                await sendRobotCardAndLog(robot, payload, chatId, targetChild.id);
                 break;
             }
             default:
@@ -2579,6 +2915,50 @@ app.post(['/api/feishu/webhook', '/api/feishu/events'], async (req, res) => {
     }
     catch (error) {
         res.status(400).json({ success: false, error: error instanceof Error ? error.message : '处理失败' });
+    }
+});
+app.post('/api/menu-bridge/trigger', async (req, res) => {
+    const robotId = typeof req.body?.robotId === 'string' ? req.body.robotId.trim() : '';
+    const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : '';
+    const actionKey = typeof req.body?.actionKey === 'string' ? req.body.actionKey.trim() : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!robotId || !chatId || !actionKey || !token) {
+        res.status(400).json({ success: false, error: '参数不完整' });
+        return;
+    }
+    if (!MENU_BRIDGE_ALLOWED_ACTIONS.includes(actionKey)) {
+        res.status(400).json({ success: false, error: '不支持的动作' });
+        return;
+    }
+    const robot = store.getSnapshot().robots.find((item) => item.id === robotId);
+    if (!robot || !robot.enabled) {
+        res.status(404).json({ success: false, error: '机器人不存在或未启用' });
+        return;
+    }
+    const expectedToken = robot.menuBridgeTokens?.[chatId];
+    if (!expectedToken || !safeEqual(expectedToken, token)) {
+        pushBotLog({
+            id: nanoid(),
+            robotId: robot.id,
+            time: new Date().toISOString(),
+            direction: 'in',
+            chatId,
+            rawText: `menu_bridge:${actionKey}`,
+            status: 'failed',
+            error: 'menu_bridge_token_invalid'
+        });
+        res.status(403).json({ success: false, error: '鉴权失败' });
+        return;
+    }
+    try {
+        const result = await triggerRobotQuickAction(robot, actionKey, chatId, {
+            displayName: '群菜单中转页'
+        });
+        res.json({ success: true, message: `${result.title}已发送`, data: { robotId, chatId, actionKey } });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : '执行失败';
+        res.status(400).json({ success: false, error: message });
     }
 });
 app.get('/api/dashboard', requireAuth, (req, res) => {
