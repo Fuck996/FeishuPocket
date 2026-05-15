@@ -21,6 +21,15 @@
   box-sizing: border-box;
 }
 
+::selection {
+  background: rgba(214, 107, 44, 0.22);
+  color: var(--text-main);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body,
 #root {
@@ -72,6 +81,27 @@ textarea:focus {
 textarea {
   resize: vertical;
   min-height: 120px;
+}
+
+/* 无障碍焦点环 */
+:focus-visible {
+  outline: 3px solid rgba(214, 107, 44, 0.52);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button:focus-visible,
+.bottom-nav__item:focus-visible,
+.chip-option:focus-visible {
+  outline: 3px solid rgba(214, 107, 44, 0.52);
+  outline-offset: 3px;
+  border-radius: inherit;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
 }
 
 label {
@@ -406,6 +436,11 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  box-shadow: var(--shadow-sm);
+}
+
 .ghost-button,
 .secondary-button,
 .icon-text-button,
@@ -613,10 +648,11 @@ button:disabled {
 }
 
 .pagination-bar__btn {
-  padding: 6px 16px;
+  padding: 10px 20px;
   border-radius: 20px;
   font-size: 14px;
   font-weight: 600;
+  min-height: 44px;
   background: var(--bg-panel-strong);
   border: 1px solid rgba(92, 72, 41, 0.14);
   color: var(--text-main);
@@ -1105,23 +1141,23 @@ button:disabled {
   overflow-y: auto;
 }
 .robot-log-item {
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 14px;
+  padding: 10px 14px;
   font-size: 13px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
+  background: var(--bg-panel-strong);
+  border: 1px solid var(--line-soft);
 }
 .robot-log-item--in {
   border-left: 3px solid #3b82f6;
 }
 .robot-log-item--out {
-  border-left: 3px solid #10b981;
+  border-left: 3px solid var(--teal);
 }
 .robot-log-item--unrecognized {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--warning);
 }
 .robot-log-item--failed {
-  border-left: 3px solid #ef4444;
+  border-left: 3px solid var(--danger);
 }
 .robot-log-meta {
   display: flex;
@@ -1138,21 +1174,21 @@ button:disabled {
   font-weight: 700;
 }
 .log-badge--in {
-  background: #dbeafe;
+  background: rgba(59, 130, 246, 0.12);
   color: #1d4ed8;
 }
 .log-badge--out {
-  background: #d1fae5;
-  color: #065f46;
+  background: rgba(15, 118, 110, 0.14);
+  color: var(--teal);
 }
 .log-status {
   font-size: 11px;
   font-weight: 600;
 }
-.log-status--ok { color: #059669; }
-.log-status--failed { color: #dc2626; }
-.log-status--unrecognized { color: #d97706; }
-.log-status--ignored { color: #6b7280; }
+.log-status--ok { color: var(--teal); }
+.log-status--failed { color: var(--danger); }
+.log-status--unrecognized { color: var(--warning); }
+.log-status--ignored { color: var(--text-sub); }
 .log-time {
   font-size: 11px;
   color: var(--text-sub);
@@ -1189,13 +1225,25 @@ button:disabled {
 .log-error {
   margin-top: 4px;
   font-size: 12px;
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .command-guide-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .command-guide-item {
