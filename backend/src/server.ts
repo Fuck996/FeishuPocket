@@ -163,6 +163,44 @@ async function getFeishuTenantAccessToken(robot: RobotConfig): Promise<string | 
   }
 }
 
+/**
+ * 用飞书 JSAPI auth code 换取当前用户的 open_id。
+ * 依赖 app_access_token（非 tenant_access_token），需要机器人已配置 AppID/AppSecret。
+ */
+async function exchangeAuthCodeForOpenId(appId: string, appSecret: string, authCode: string): Promise<string> {
+  // 先获取 app_access_token
+  const tokenResp = await fetch('https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret })
+  });
+  if (!tokenResp.ok) {
+    throw new Error(`获取 app_access_token 失败 (HTTP ${tokenResp.status})`);
+  }
+  const tokenData = await tokenResp.json() as { app_access_token?: string; code?: number; msg?: string };
+  if (!tokenData.app_access_token) {
+    throw new Error(`获取 app_access_token 失败: code=${tokenData.code ?? 'unknown'} msg=${tokenData.msg ?? 'unknown'}`);
+  }
+
+  // 用 auth code 换取用户身份信息
+  const authenResp = await fetch('https://open.feishu.cn/open-apis/authen/v1/access_token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${tokenData.app_access_token}`,
+      'Content-Type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify({ grant_type: 'authorization_code', code: authCode })
+  });
+  if (!authenResp.ok) {
+    throw new Error(`auth code 换取用户信息失败 (HTTP ${authenResp.status})`);
+  }
+  const authenData = await authenResp.json() as { code?: number; msg?: string; data?: { open_id?: string } };
+  if (authenData.code !== 0 || !authenData.data?.open_id) {
+    throw new Error(`auth code 换取用户信息失败: code=${authenData.code ?? 'unknown'} msg=${authenData.msg ?? 'unknown'}`);
+  }
+  return authenData.data.open_id;
+}
+
 async function queryFeishuUserName(robot: RobotConfig, identity: FeishuUserIdentity): Promise<string | undefined> {
   if (identity.displayNameHint?.trim()) {
     setCachedFeishuUserName(identity, identity.displayNameHint.trim());
@@ -1341,8 +1379,13 @@ function normalizeMenuBridgeActionKeys(input: unknown): MenuBridgeActionKey[] {
   return normalized.length > 0 ? normalized : [...MENU_BRIDGE_ALLOWED_ACTIONS];
 }
 
-function buildMenuBridgePath(robotId: string, chatId: string, actionKey: string, token: string): string {
-  const query = new URLSearchParams({ robotId, chatId, actionKey, token });
+function buildMenuBridgePath(robotId: string, chatId: string, actionKey: string, token: string, appId?: string): string {
+  const params: Record<string, string> = { robotId, chatId, actionKey, token };
+  // 传入 appId 时写入 URL，供 H5 页面向飞书请求 auth code（识别操作者身份）
+  if (appId?.trim()) {
+    params.appId = appId.trim();
+  }
+  const query = new URLSearchParams(params);
   return `/menu-bridge.html?${query.toString()}`;
 }
 
@@ -1446,7 +1489,7 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): { static
 
   const staticLinks: Record<string, string> = {};
   for (const actionKey of actionKeys) {
-    const relativePath = buildMenuBridgePath(robot.id, chatId, actionKey, token);
+    const relativePath = buildMenuBridgePath(robot.id, chatId, actionKey, token, robot.feishuAppId);
     staticLinks[actionKey] = buildMenuBridgeUrl(baseUrl, relativePath);
   }
 
@@ -1458,7 +1501,7 @@ function buildRobotMenuBridgeLinks(robot: RobotConfig, chatId: string): { static
   ).map((rule) => ({
     ruleId: rule.id,
     label: `${rule.keyword}（${rule.amount}元）`,
-    url: buildMenuBridgeUrl(baseUrl, buildMenuBridgePath(robot.id, chatId, `reward_rule:${rule.id}`, token))
+    url: buildMenuBridgeUrl(baseUrl, buildMenuBridgePath(robot.id, chatId, `reward_rule:${rule.id}`, token, robot.feishuAppId))
   }));
 
   return { staticLinks, rewardItems };
@@ -2840,7 +2883,7 @@ app.post('/api/robots/:robotId/menu-bridge-links', requireAuth, requireRole('adm
   }
 
   const links = actionKeys.map((actionKey) => {
-    const relativePath = buildMenuBridgePath(robotId, chatId, actionKey, token);
+    const relativePath = buildMenuBridgePath(robotId, chatId, actionKey, token, robot.feishuAppId);
     return {
       actionKey,
       relativePath,
@@ -3699,6 +3742,8 @@ app.post('/api/menu-bridge/trigger', async (req, res) => {
   const chatId = typeof req.body?.chatId === 'string' ? req.body.chatId.trim() : '';
   const actionKey = typeof req.body?.actionKey === 'string' ? req.body.actionKey.trim() : '';
   const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  // authCode 由飞书 H5 JSAPI 获取，用于识别操作者真实身份（可选）
+  const authCode = typeof req.body?.authCode === 'string' ? req.body.authCode.trim() : '';
 
   if (!robotId || !chatId || !actionKey || !token) {
     res.status(400).json({ success: false, error: '参数不完整' });
@@ -3735,10 +3780,22 @@ app.post('/api/menu-bridge/trigger', async (req, res) => {
     return;
   }
 
+  // 尝试通过 auth code 识别操作者真实身份
+  // 仅当机器人配置了 AppID/AppSecret 且 H5 页面传入了 authCode 时才执行
+  let actor: { displayName?: string; openId?: string } = { displayName: '群菜单中转页' };
+  if (authCode && robot.feishuAppId && robot.feishuAppSecret) {
+    try {
+      const openId = await exchangeAuthCodeForOpenId(robot.feishuAppId, robot.feishuAppSecret, authCode);
+      const displayName = await queryFeishuUserName(robot, { openId });
+      actor = { openId, displayName: displayName ?? '群成员' };
+    } catch (err) {
+      // auth code 换取失败不阻断操作，降级为匿名触发
+      console.warn('[MenuBridge] auth code 换取操作者身份失败，将以匿名触发', err);
+    }
+  }
+
   try {
-    const result = await triggerRobotQuickAction(robot, actionKey, chatId, {
-      displayName: '群菜单中转页'
-    });
+    const result = await triggerRobotQuickAction(robot, actionKey, chatId, actor);
     res.json({ success: true, message: `${result.title}已发送`, data: { robotId, chatId, actionKey } });
   } catch (error) {
     const message = error instanceof Error ? error.message : '执行失败';

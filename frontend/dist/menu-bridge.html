@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>飞书零花钱助手 - 群菜单中转</title>
+    <!-- 飞书 H5 JSSDK，用于获取 auth code 识别操作者身份 -->
+    <script src="https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js"></script>
     <style>
       :root {
         --bg: #f7efe4;
@@ -64,6 +66,11 @@
         background: var(--accent);
         color: #fff;
         cursor: pointer;
+        font-size: 14px;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
     </style>
   </head>
@@ -72,16 +79,18 @@
       <h1>正在触发群内操作</h1>
       <p>请稍候，系统会把结果卡片直接发送到当前群。</p>
       <div id="status" class="status">初始化中...</div>
+      <button id="retryBtn" class="btn" type="button" style="display:none">重新授权</button>
       <button id="closeBtn" class="btn" type="button">关闭页面</button>
     </main>
 
     <script>
       const statusEl = document.getElementById('status');
+      const retryBtn = document.getElementById('retryBtn');
       const closeBtn = document.getElementById('closeBtn');
 
       function setStatus(message, ok) {
         statusEl.textContent = message;
-        statusEl.className = `status ${ok ? 'ok' : 'err'}`;
+        statusEl.className = `status ${ok === true ? 'ok' : ok === false ? 'err' : ''}`;
       }
 
       function parseParams() {
@@ -90,43 +99,128 @@
           robotId: (query.get('robotId') || '').trim(),
           chatId: (query.get('chatId') || '').trim(),
           actionKey: (query.get('actionKey') || '').trim(),
-          token: (query.get('token') || '').trim()
+          token: (query.get('token') || '').trim(),
+          appId: (query.get('appId') || '').trim()
         };
       }
 
+      function isFeishuClient() {
+        const ua = (navigator.userAgent || '').toLowerCase();
+        return ua.includes('lark') || ua.includes('feishu');
+      }
+
+      /**
+       * 等待飞书 JSSDK 就绪（window.tt.requestAuthCode 可用）。
+       */
+      function waitForFeishuBridge(timeoutMs) {
+        return new Promise(function(resolve, reject) {
+          var startedAt = Date.now();
+          var timer = setInterval(function() {
+            if (typeof window.tt !== 'undefined' && typeof window.tt.requestAuthCode === 'function') {
+              clearInterval(timer);
+              resolve();
+              return;
+            }
+            if (Date.now() - startedAt >= timeoutMs) {
+              clearInterval(timer);
+              reject(new Error('飞书 H5 JSSDK 未就绪'));
+            }
+          }, 120);
+        });
+      }
+
+      /**
+       * 通过飞书 JSAPI 获取一次性 auth code。
+       * 仅在飞书客户端内部可用。
+       */
+      async function requestFeishuAuthCode(appId) {
+        await waitForFeishuBridge(6000);
+        return new Promise(function(resolve, reject) {
+          function run() {
+            window.tt.requestAuthCode({
+              appId: appId,
+              success: function(res) {
+                if (res && res.code) { resolve(res.code); }
+                else { reject(new Error('飞书未返回 auth code')); }
+              },
+              fail: function(err) {
+                reject(new Error('获取飞书身份失败：' + JSON.stringify(err)));
+              }
+            });
+          }
+          if (window.h5sdk && typeof window.h5sdk.ready === 'function') {
+            window.h5sdk.ready(run);
+          } else {
+            run();
+          }
+        });
+      }
+
+      async function doTrigger(payload) {
+        const response = await fetch('/api/menu-bridge/trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const raw = await response.text();
+        const result = raw ? JSON.parse(raw) : {};
+        if (!response.ok || result.success === false) {
+          throw new Error(result.error || '请求失败(' + response.status + ')');
+        }
+        return result;
+      }
+
       async function trigger() {
-        const payload = parseParams();
-        if (!payload.robotId || !payload.chatId || !payload.actionKey || !payload.token) {
+        const params = parseParams();
+        if (!params.robotId || !params.chatId || !params.actionKey || !params.token) {
           setStatus('参数缺失：请检查群菜单链接是否完整。', false);
           return;
         }
 
-        try {
-          const response = await fetch('/api/menu-bridge/trigger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          const raw = await response.text();
-          const result = raw ? JSON.parse(raw) : {};
+        const payload = {
+          robotId: params.robotId,
+          chatId: params.chatId,
+          actionKey: params.actionKey,
+          token: params.token
+        };
 
-          if (!response.ok || result.success === false) {
-            throw new Error(result.error || `请求失败(${response.status})`);
+        // 若 URL 中包含 appId，尝试通过飞书 JSAPI 获取 auth code 识别操作者
+        if (params.appId) {
+          setStatus('正在向飞书客户端请求身份授权...');
+          try {
+            const authCode = await requestFeishuAuthCode(params.appId);
+            payload.authCode = authCode;
+          } catch (err) {
+            // auth code 获取失败（如非飞书客户端打开），降级为匿名触发
+            if (!isFeishuClient()) {
+              // 非飞书客户端：跳过身份识别，直接触发
+              console.info('[MenuBridge] 非飞书客户端，跳过 auth code 获取，以匿名身份触发');
+            } else {
+              // 飞书客户端内但 SDK 失败：提示用户，提供重试按钮
+              const errMsg = err instanceof Error ? err.message : String(err);
+              setStatus('身份授权失败：' + errMsg + '\n可点击"重新授权"重试，或直接关闭页面。', false);
+              retryBtn.style.display = 'inline-block';
+              retryBtn.onclick = function() {
+                retryBtn.style.display = 'none';
+                trigger();
+              };
+              return;
+            }
           }
+        }
 
+        setStatus('正在发送请求...');
+        try {
+          await doTrigger(payload);
           setStatus('已触发成功，结果卡片已发送到群聊。\n本页面将尝试自动关闭。', true);
-          setTimeout(() => {
-            window.close();
-          }, 1000);
+          setTimeout(function() { window.close(); }, 1200);
         } catch (error) {
           const message = error instanceof Error ? error.message : '触发失败';
-          setStatus(`触发失败：${message}`, false);
+          setStatus('触发失败：' + message, false);
         }
       }
 
-      closeBtn.addEventListener('click', () => {
-        window.close();
-      });
+      closeBtn.addEventListener('click', function() { window.close(); });
 
       trigger();
     </script>
